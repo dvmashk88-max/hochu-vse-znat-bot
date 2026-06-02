@@ -1,7 +1,7 @@
 import logging
 from app.bot import send_text, send_photo_with_caption
 from app.generator import generate_post
-from app.images import fetch_image
+from app.images import fetch_image, generate_image_query
 from app.topic_selector import pick_next_topic
 from app.db import save_published_topic
 from app.config import TELEGRAM_CHANNEL_ID
@@ -20,7 +20,7 @@ async def publish_next_post() -> None:
         return
 
     try:
-        image_bytes = await fetch_image(topic)
+        image_bytes = await fetch_image(generate_image_query(topic))
     except Exception as e:
         logger.warning("Failed to fetch image for '%s': %s", topic, e)
         image_bytes = None
