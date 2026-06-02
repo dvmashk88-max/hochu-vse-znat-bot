@@ -5,6 +5,7 @@ from app.images import fetch_image, generate_image_query
 from app.topic_selector import pick_next_topic
 from app.db import save_published_topic
 from app.config import TELEGRAM_CHANNEL_ID
+from app.dzen_publisher import publish_draft
 
 logger = logging.getLogger(__name__)
 
@@ -36,3 +37,8 @@ async def publish_next_post() -> None:
 
     save_published_topic(topic)
     logger.info("Published topic: %s", topic)
+
+    try:
+        await publish_draft(title=topic, text=text)
+    except Exception as e:
+        logger.error("Failed to create Dzen draft: %s", e)
