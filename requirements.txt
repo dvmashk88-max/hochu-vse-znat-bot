@@ -5,3 +5,4 @@ requests
 certifi
 apscheduler
 python-dotenv
+playwright

@@ -54,6 +54,8 @@ python3.12 -c "import asyncio; from app.publisher import publish_next_post; asyn
 | `PEXELS_API_KEY` | Ключ Pexels API для резервного поиска изображений |
 | `DATABASE_URL` | URL базы данных (по умолчанию SQLite) |
 | `POST_INTERVAL_HOURS` | Интервал публикаций в часах (по умолчанию 6) |
+| `DZEN_CHANNEL_URL` | URL канала Дзена |
+| `DZEN_STORAGE_STATE_JSON` | JSON-содержимое Playwright storage state для авторизации в Дзене |
 
 ## Деплой на Railway
 
@@ -62,7 +64,26 @@ python3.12 -c "import asyncio; from app.publisher import publish_next_post; asyn
 1. Создать новый проект на Railway
 2. Подключить репозиторий
 3. Добавить переменные окружения в настройках сервиса
-4. Railway автоматически запустит `uvicorn app.main:app`
+4. Railway установит зависимости и Chromium для Playwright через `buildCommand`
+5. Railway автоматически запустит `uvicorn app.main:app`
+
+## Дзен
+
+Дзен работает через Playwright и создаёт черновики статей. Кнопка «Опубликовать» не нажимается.
+
+Для Railway нужно добавить переменную окружения `DZEN_STORAGE_STATE_JSON`. Её значение — содержимое файла `storage/dzen_cookies.json` одной строкой. Если эта переменная задана, бот использует её вместо локального файла cookies.
+
+Локально можно использовать файл `storage/dzen_cookies.json`. Если `DZEN_STORAGE_STATE_JSON` не задана, код попробует взять сессию из этого файла.
+
+```bash
+# 1. Установить зависимости (если ещё не установлены)
+python3.12 -m pip install -r requirements.txt
+
+# 2. Установить браузер Chromium для Playwright
+python3.12 -m playwright install chromium
+```
+
+Сессия хранится в `storage/dzen_cookies.json` (в `.gitignore`). Для Railway скопируйте всё содержимое этого файла в `DZEN_STORAGE_STATE_JSON` без переносов строк.
 
 ## Health check
 

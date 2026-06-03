@@ -2,6 +2,9 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+from typing import Any
+
+from app.config import DZEN_CHANNEL_URL, DZEN_STORAGE_STATE_JSON
 
 logger = logging.getLogger(__name__)
 
@@ -9,13 +12,34 @@ STORAGE_DIR = Path("storage")
 COOKIES_FILE = STORAGE_DIR / "dzen_cookies.json"
 
 
-async def save_dzen_cookies() -> None:
+def _log_step(message: str) -> None:
+    print(message)
+    logger.info(message)
+
+
+def _load_storage_state() -> dict[str, Any] | str:
+    if DZEN_STORAGE_STATE_JSON:
+        try:
+            return json.loads(DZEN_STORAGE_STATE_JSON)
+        except json.JSONDecodeError as e:
+            raise ValueError("DZEN_STORAGE_STATE_JSON содержит невалидный JSON") from e
+
+    if COOKIES_FILE.exists():
+        return str(COOKIES_FILE)
+
+    raise FileNotFoundError(
+        f"Не найдена сессия Дзена. Добавьте DZEN_STORAGE_STATE_JSON в переменные окружения "
+        f"или положите файл сессии в {COOKIES_FILE}."
+    )
+
+
+async def save_dzen_cookies(headless: bool = True) -> None:
     from playwright.async_api import async_playwright
 
     STORAGE_DIR.mkdir(exist_ok=True)
 
     async with async_playwright() as p:
-        launch_kwargs = {"headless": False}
+        launch_kwargs = {"headless": headless}
         if COOKIES_FILE.exists():
             browser = await p.chromium.launch(**launch_kwargs)
             context = await browser.new_context(storage_state=str(COOKIES_FILE))
@@ -26,10 +50,6 @@ async def save_dzen_cookies() -> None:
 
         page = await context.new_page()
         await page.goto("https://dzen.ru")
-
-        print("\nОткрылся браузер с Дзеном.")
-        print("Войдите в аккаунт вручную, затем нажмите Enter здесь, чтобы сохранить сессию.")
-        await asyncio.to_thread(input, "")
 
         await context.storage_state(path=str(COOKIES_FILE))
         logger.info("Cookies saved to %s", COOKIES_FILE)
@@ -53,9 +73,6 @@ async def _type_into(page, el, text: str) -> None:
         await page.keyboard.press("Control+a")
         await page.keyboard.press("Control+v")
         logger.info("  Вставка через буфер обмена выполнена.")
-
-
-CHANNEL_URL = "https://dzen.ru/aibotpro163"
 
 
 async def _click_first_visible(locators: list, label: str, timeout: int = 6000):
@@ -85,121 +102,104 @@ async def _wait_element(locators: list, label: str, timeout: int = 8000):
     raise RuntimeError(f"Поле не найдено: {label}")
 
 
-async def publish_draft(title: str, text: str) -> None:
+async def publish_draft(title: str, text: str, headless: bool = True) -> None:
     from playwright.async_api import async_playwright
 
-    if not COOKIES_FILE.exists():
-        raise FileNotFoundError(
-            f"Файл сессии не найден: {COOKIES_FILE}. "
-            "Сначала запустите save_dzen_cookies()."
-        )
+    storage_state = _load_storage_state()
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context(storage_state=str(COOKIES_FILE))
-        page = await context.new_page()
-
-        # ── 1. Открываем страницу канала ─────────────────────────────────────
-        print(f"[1/7] Открываю канал: {CHANNEL_URL}")
-        await page.goto(CHANNEL_URL, wait_until="networkidle")
-        print(f"  URL: {page.url}")
-
-        # ── 2. Кликаем на аватар (правый верхний угол) ────────────────────────
-        print("[2/7] Нажимаю аватар...")
-        await _click_first_visible([
-            page.locator('[data-testid="user-avatar"]'),
-            page.locator('[data-testid*="avatar"]'),
-            page.locator('header [class*="Avatar"]'),
-            page.locator('header [class*="avatar"]'),
-            page.locator('header img[class*="avatar"]'),
-            page.locator('[class*="UserMenu"] img'),
-            page.locator('[class*="userMenu"] img'),
-            page.locator('[class*="HeaderUser"]'),
-            page.locator('[class*="header-user"]'),
-            # последний вариант — любая кликабельная иконка в правом углу шапки
-            page.locator('header button').last,
-        ], "аватар пользователя")
-
-        # небольшая пауза, чтобы меню успело появиться
-        await page.wait_for_timeout(800)
-
-        # ── 3. Нажимаем «Создать публикацию» ─────────────────────────────────
-        print("[3/7] Нажимаю «Создать публикацию»...")
-        await _click_first_visible([
-            page.get_by_text("Создать публикацию", exact=True),
-            page.get_by_text("Создать публикацию", exact=False),
-            page.locator('[role="menuitem"]:has-text("Создать публикацию")'),
-            page.locator('li:has-text("Создать публикацию")'),
-            page.locator('a:has-text("Создать публикацию")'),
-            page.locator('button:has-text("Создать публикацию")'),
-            page.locator('span:has-text("Создать публикацию")'),
-        ], "«Создать публикацию»")
-
-        await page.wait_for_timeout(600)
-
-        # ── 4. Нажимаем «Написать статью» ────────────────────────────────────
-        print("[4/7] Нажимаю «Написать статью»...")
-        await _click_first_visible([
-            page.get_by_text("Написать статью", exact=True),
-            page.get_by_text("Написать статью", exact=False),
-            page.locator('[role="menuitem"]:has-text("Написать статью")'),
-            page.locator('li:has-text("Написать статью")'),
-            page.locator('a:has-text("Написать статью")'),
-            page.locator('button:has-text("Написать статью")'),
-            page.locator('span:has-text("Написать статью")'),
-        ], "«Написать статью»")
-
-        # ── 5. Ждём открытия редактора ────────────────────────────────────────
-        print("[5/7] Жду редактор (URL: /profile/editor/id/.../edit)...")
+        browser = await p.chromium.launch(headless=headless)
         try:
-            await page.wait_for_url("**/profile/editor/id/**", timeout=25000)
-        except Exception:
-            # Дзен может использовать другой паттерн — ждём любой /editor/
+            context = await browser.new_context(storage_state=storage_state)
+            page = await context.new_page()
+
+            _log_step(f"Открываю канал: {DZEN_CHANNEL_URL}")
+            await page.goto(DZEN_CHANNEL_URL, wait_until="networkidle")
+            logger.info("Dzen URL: %s", page.url)
+
+            _log_step("Нажимаю аватар")
+            await _click_first_visible([
+                page.locator('[data-testid="user-avatar"]'),
+                page.locator('[data-testid*="avatar"]'),
+                page.locator('header [class*="Avatar"]'),
+                page.locator('header [class*="avatar"]'),
+                page.locator('header img[class*="avatar"]'),
+                page.locator('[class*="UserMenu"] img'),
+                page.locator('[class*="userMenu"] img'),
+                page.locator('[class*="HeaderUser"]'),
+                page.locator('[class*="header-user"]'),
+                page.locator('header button').last,
+            ], "аватар пользователя")
+
+            await page.wait_for_timeout(800)
+
+            _log_step("Нажимаю Создать публикацию")
+            await _click_first_visible([
+                page.get_by_text("Создать публикацию", exact=True),
+                page.get_by_text("Создать публикацию", exact=False),
+                page.locator('[role="menuitem"]:has-text("Создать публикацию")'),
+                page.locator('li:has-text("Создать публикацию")'),
+                page.locator('a:has-text("Создать публикацию")'),
+                page.locator('button:has-text("Создать публикацию")'),
+                page.locator('span:has-text("Создать публикацию")'),
+            ], "«Создать публикацию»")
+
+            await page.wait_for_timeout(600)
+
+            _log_step("Нажимаю Написать статью")
+            await _click_first_visible([
+                page.get_by_text("Написать статью", exact=True),
+                page.get_by_text("Написать статью", exact=False),
+                page.locator('[role="menuitem"]:has-text("Написать статью")'),
+                page.locator('li:has-text("Написать статью")'),
+                page.locator('a:has-text("Написать статью")'),
+                page.locator('button:has-text("Написать статью")'),
+                page.locator('span:has-text("Написать статью")'),
+            ], "«Написать статью»")
+
+            _log_step("Жду редактор")
             try:
-                await page.wait_for_url("**/editor/**", timeout=10000)
+                await page.wait_for_url("**/profile/editor/id/**", timeout=25000)
             except Exception:
-                await page.wait_for_load_state("networkidle", timeout=15000)
+                try:
+                    await page.wait_for_url("**/editor/**", timeout=10000)
+                except Exception:
+                    await page.wait_for_load_state("networkidle", timeout=15000)
 
-        await page.wait_for_load_state("networkidle")
-        print(f"  Редактор открыт: {page.url}")
+            await page.wait_for_load_state("networkidle")
+            logger.info("Dzen editor URL: %s", page.url)
 
-        # ── 6. Заполняем заголовок ────────────────────────────────────────────
-        print("[6/7] Заполняю заголовок...")
-        title_el = await _wait_element([
-            page.get_by_placeholder("Заголовок"),
-            page.locator('[placeholder*="аголовок"]'),
-            page.locator('[data-testid*="title"] [contenteditable]'),
-            page.locator('[class*="title"][contenteditable="true"]'),
-            page.locator('[class*="Title"][contenteditable="true"]'),
-            page.locator('[contenteditable="true"]').first,
-        ], "заголовок")
+            _log_step("Заполняю заголовок")
+            title_el = await _wait_element([
+                page.get_by_placeholder("Заголовок"),
+                page.locator('[placeholder*="аголовок"]'),
+                page.locator('[data-testid*="title"] [contenteditable]'),
+                page.locator('[class*="title"][contenteditable="true"]'),
+                page.locator('[class*="Title"][contenteditable="true"]'),
+                page.locator('[contenteditable="true"]').first,
+            ], "заголовок")
 
-        await _type_into(page, title_el, title)
-        print(f"  Заголовок вставлен: «{title}»")
+            await _type_into(page, title_el, title)
+            logger.info("Dzen title inserted: %s", title)
 
-        # ── 7. Заполняем текст ────────────────────────────────────────────────
-        print("[7/7] Заполняю текст...")
-        body_el = await _wait_element([
-            page.get_by_placeholder("Начните писать"),
-            page.get_by_placeholder("Текст статьи"),
-            page.locator('[placeholder*="Начните"]'),
-            page.locator('[placeholder*="Текст"]'),
-            page.locator('[data-testid*="body"] [contenteditable]'),
-            page.locator('[data-testid*="content"] [contenteditable]'),
-            page.locator('[class*="body"][contenteditable="true"]'),
-            page.locator('[class*="Body"][contenteditable="true"]'),
-            page.locator('[contenteditable="true"]').nth(1),
-        ], "поле текста")
+            _log_step("Заполняю текст")
+            body_el = await _wait_element([
+                page.get_by_placeholder("Начните писать"),
+                page.get_by_placeholder("Текст статьи"),
+                page.locator('[placeholder*="Начните"]'),
+                page.locator('[placeholder*="Текст"]'),
+                page.locator('[data-testid*="body"] [contenteditable]'),
+                page.locator('[data-testid*="content"] [contenteditable]'),
+                page.locator('[class*="body"][contenteditable="true"]'),
+                page.locator('[class*="Body"][contenteditable="true"]'),
+                page.locator('[contenteditable="true"]').nth(1),
+            ], "поле текста")
 
-        await _type_into(page, body_el, text)
-        print("  Текст вставлен.")
-
-        print("\nЧерновик заполнен. Кнопка публикации НЕ нажата.")
-        print("Проверьте черновик в браузере. Нажмите Enter, чтобы закрыть браузер.")
-        await asyncio.to_thread(input, "")
-
-        await browser.close()
-        print("Браузер закрыт.")
+            await _type_into(page, body_el, text)
+            _log_step("Черновик Дзена создан")
+        finally:
+            await browser.close()
+            _log_step("Браузер закрыт")
 
 
 if __name__ == "__main__":
