@@ -56,6 +56,7 @@ python3.12 -c "import asyncio; from app.publisher import publish_next_post; asyn
 | `POST_INTERVAL_HOURS` | Интервал публикаций в часах (по умолчанию 6) |
 | `DZEN_CHANNEL_URL` | URL канала Дзена |
 | `DZEN_STORAGE_STATE_JSON` | JSON-содержимое Playwright storage state для авторизации в Дзене |
+| `DZEN_AUTO_PUBLISH` | Автопубликация статей в Дзен (`false` по умолчанию) |
 
 ## Деплой на Railway
 
@@ -70,6 +71,10 @@ python3.12 -c "import asyncio; from app.publisher import publish_next_post; asyn
 ## Дзен
 
 Дзен работает через Playwright и создаёт черновики статей. Кнопка «Опубликовать» не нажимается.
+
+По умолчанию `DZEN_AUTO_PUBLISH=false`, поэтому Дзен только создаёт черновик. Чтобы включить автоматическую публикацию в Railway, задайте переменную окружения `DZEN_AUTO_PUBLISH=true`.
+
+Внимание: `DZEN_AUTO_PUBLISH=true` публикует статьи в Дзен автоматически.
 
 Для Railway нужно добавить переменную окружения `DZEN_STORAGE_STATE_JSON`. Её значение — содержимое файла `storage/dzen_cookies.json` одной строкой. Если эта переменная задана, бот использует её вместо локального файла cookies.
 

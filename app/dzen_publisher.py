@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from app.config import DZEN_CHANNEL_URL, DZEN_STORAGE_STATE_JSON
+from app.config import DZEN_AUTO_PUBLISH, DZEN_CHANNEL_URL, DZEN_STORAGE_STATE_JSON
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +102,39 @@ async def _wait_element(locators: list, label: str, timeout: int = 8000):
     raise RuntimeError(f"Поле не найдено: {label}")
 
 
+async def _auto_publish_article(page) -> None:
+    _log_step("Автопубликация Дзена включена")
+
+    _log_step("Нажимаю Далее")
+    await _click_first_visible([
+        page.get_by_role("button", name="Далее", exact=True),
+        page.get_by_role("button", name="Продолжить", exact=True),
+        page.locator('button:has-text("Далее")'),
+        page.locator('[role="button"]:has-text("Далее")'),
+        page.locator('button:has-text("Продолжить")'),
+        page.locator('[role="button"]:has-text("Продолжить")'),
+    ], "кнопка «Далее» для публикации")
+
+    try:
+        await page.wait_for_load_state("networkidle", timeout=15000)
+    except Exception:
+        await page.wait_for_timeout(2000)
+
+    _log_step("Нажимаю Опубликовать")
+    await _click_first_visible([
+        page.get_by_role("button", name="Опубликовать", exact=True),
+        page.locator('button:has-text("Опубликовать")'),
+        page.locator('[role="button"]:has-text("Опубликовать")'),
+    ], "финальная кнопка «Опубликовать»")
+
+    try:
+        await page.wait_for_load_state("networkidle", timeout=15000)
+    except Exception:
+        await page.wait_for_timeout(2000)
+
+    _log_step("Статья опубликована в Дзене")
+
+
 async def publish_draft(title: str, text: str, headless: bool = True) -> None:
     from playwright.async_api import async_playwright
 
@@ -196,7 +229,11 @@ async def publish_draft(title: str, text: str, headless: bool = True) -> None:
             ], "поле текста")
 
             await _type_into(page, body_el, text)
-            _log_step("Черновик Дзена создан")
+            if not DZEN_AUTO_PUBLISH:
+                _log_step("Черновик Дзена создан")
+                return
+
+            await _auto_publish_article(page)
         finally:
             await browser.close()
             _log_step("Браузер закрыт")
