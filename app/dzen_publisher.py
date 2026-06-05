@@ -60,7 +60,12 @@ async def save_dzen_cookies(headless: bool = True) -> None:
 
 async def _type_into(page, el, text: str) -> None:
     """Пробует fill(), при неудаче — clipboard paste."""
-    await el.click()
+    await _dismiss_editor_popups(page)
+    try:
+        await el.click(timeout=8000)
+    except Exception:
+        await _dismiss_editor_popups(page)
+        await el.click(timeout=8000, force=True)
     try:
         await el.fill(text)
         logger.info("  fill() успешно.")
@@ -73,6 +78,56 @@ async def _type_into(page, el, text: str) -> None:
         await page.keyboard.press("Control+a")
         await page.keyboard.press("Control+v")
         logger.info("  Вставка через буфер обмена выполнена.")
+
+
+async def _dismiss_editor_popups(page) -> None:
+    """Закрывает подсказки редактора Дзена, которые перекрывают поле статьи."""
+    try:
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(300)
+    except Exception:
+        pass
+
+    close_locators = [
+        page.get_by_role("button", name="Понятно", exact=True),
+        page.get_by_role("button", name="Закрыть", exact=True),
+        page.get_by_role("button", name="Продолжить", exact=True),
+        page.locator('button:has-text("Понятно")'),
+        page.locator('button:has-text("Закрыть")'),
+        page.locator('[aria-label="Закрыть"]'),
+        page.locator('[aria-label*="закры"]'),
+        page.locator('.ReactModal__Overlay--after-open button').last,
+    ]
+
+    for loc in close_locators:
+        try:
+            el = loc.first if hasattr(loc, "first") else loc
+            if await el.is_visible(timeout=700):
+                await el.click(timeout=1500, force=True)
+                await page.wait_for_timeout(300)
+                logger.info("  Всплывающее окно редактора закрыто.")
+                break
+        except Exception:
+            continue
+
+    try:
+        await page.evaluate(
+            """
+            () => {
+                for (const overlay of document.querySelectorAll('.ReactModal__Overlay')) {
+                    const text = (overlay.innerText || '').toLowerCase();
+                    const className = overlay.className || '';
+                    if (className.includes('help-popup') || text.includes('подсказ') || text.includes('помощ')) {
+                        const portal = overlay.closest('.ReactModalPortal');
+                        (portal || overlay).remove();
+                    }
+                }
+                document.body.style.overflow = '';
+            }
+            """
+        )
+    except Exception:
+        pass
 
 
 async def _click_first_visible(locators: list, label: str, timeout: int = 6000):
@@ -201,6 +256,7 @@ async def publish_draft(title: str, text: str, headless: bool = True) -> None:
 
             await page.wait_for_load_state("networkidle")
             logger.info("Dzen editor URL: %s", page.url)
+            await _dismiss_editor_popups(page)
 
             _log_step("Заполняю заголовок")
             title_el = await _wait_element([
@@ -214,6 +270,7 @@ async def publish_draft(title: str, text: str, headless: bool = True) -> None:
 
             await _type_into(page, title_el, title)
             logger.info("Dzen title inserted: %s", title)
+            await _dismiss_editor_popups(page)
 
             _log_step("Заполняю текст")
             body_el = await _wait_element([
@@ -229,6 +286,11 @@ async def publish_draft(title: str, text: str, headless: bool = True) -> None:
             ], "поле текста")
 
             await _type_into(page, body_el, text)
+            await page.wait_for_timeout(500)
+            body_text = await body_el.inner_text()
+            if len(body_text.strip()) < min(20, len(text.strip())):
+                raise RuntimeError("Текст статьи не появился в редакторе Дзена")
+
             if not DZEN_AUTO_PUBLISH:
                 _log_step("Черновик Дзена создан")
                 return

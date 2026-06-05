@@ -70,7 +70,7 @@ python3.12 -c "import asyncio; from app.publisher import publish_next_post; asyn
 
 ## Дзен
 
-Дзен работает через Playwright и создаёт черновики статей. Кнопка «Опубликовать» не нажимается.
+Дзен работает через Playwright: заполняет статью, создаёт черновик и при `DZEN_AUTO_PUBLISH=true` нажимает кнопки публикации.
 
 По умолчанию `DZEN_AUTO_PUBLISH=false`, поэтому Дзен только создаёт черновик. Чтобы включить автоматическую публикацию в Railway, задайте переменную окружения `DZEN_AUTO_PUBLISH=true`.
 
