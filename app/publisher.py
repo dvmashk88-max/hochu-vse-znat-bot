@@ -3,7 +3,7 @@ from app.bot import send_text, send_photo_with_caption
 from app.generator import generate_post
 from app.images import fetch_image, generate_image_query
 from app.topic_selector import pick_next_topic
-from app.db import save_published_topic
+from app.db import save_dzen_publication_status, save_published_topic
 from app.config import TELEGRAM_CHANNEL_ID
 from app.dzen_publisher import publish_draft
 
@@ -39,6 +39,10 @@ async def publish_next_post() -> None:
     logger.info("Published topic: %s", topic)
 
     try:
-        await publish_draft(title=topic, text=text)
+        dzen_status = await publish_draft(title=topic, text=text, image_bytes=image_bytes)
     except Exception as e:
+        save_dzen_publication_status(topic, "failed", str(e))
         logger.error("Failed to create Dzen draft: %s", e)
+    else:
+        save_dzen_publication_status(topic, dzen_status)
+        logger.info("Dzen publication status for '%s': %s", topic, dzen_status)

@@ -57,6 +57,8 @@ python3.12 -c "import asyncio; from app.publisher import publish_next_post; asyn
 | `DZEN_CHANNEL_URL` | URL канала Дзена |
 | `DZEN_STORAGE_STATE_JSON` | JSON-содержимое Playwright storage state для авторизации в Дзене |
 | `DZEN_AUTO_PUBLISH` | Автопубликация статей в Дзен (`false` по умолчанию) |
+| `DZEN_DEBUG_SCREENSHOTS` | Сохранять debug-скриншоты Дзена при публикации (`true` по умолчанию) |
+| `DZEN_DEBUG_DIR` | Папка для debug-скриншотов Дзена (`storage/dzen_debug` по умолчанию) |
 
 ## Деплой на Railway
 

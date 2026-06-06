@@ -1,6 +1,7 @@
 .env
 storage/cookies.json
 storage/dzen_cookies.json
+storage/dzen_debug/
 
 __pycache__/
 *.pyc

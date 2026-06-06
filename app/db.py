@@ -21,6 +21,15 @@ def init_db() -> None:
                 published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS dzen_publications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                topic TEXT NOT NULL,
+                status TEXT NOT NULL,
+                error TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
 
 
@@ -34,3 +43,12 @@ def get_published_topics() -> list[str]:
     with _connect() as conn:
         rows = conn.execute("SELECT topic FROM published_topics").fetchall()
     return [row[0] for row in rows]
+
+
+def save_dzen_publication_status(topic: str, status: str, error: str | None = None) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO dzen_publications (topic, status, error) VALUES (?, ?, ?)",
+            (topic, status, error),
+        )
+        conn.commit()
