@@ -329,7 +329,36 @@ async def _wait_for_article_editor(page) -> None:
 
 
 async def _click_create_publication(page) -> None:
+    async def article_option_is_visible() -> bool:
+        option_locators = [
+            page.get_by_text("Написать статью", exact=True),
+            page.get_by_text("Написать статью", exact=False),
+            page.locator('[role="menuitem"]:has-text("Написать статью")'),
+            page.locator('li:has-text("Написать статью")'),
+            page.locator('a:has-text("Написать статью")'),
+            page.locator('button:has-text("Написать статью")'),
+            page.locator('span:has-text("Написать статью")'),
+        ]
+        for loc in option_locators:
+            try:
+                if await loc.first.is_visible(timeout=700):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def close_wrong_menu() -> None:
+        try:
+            if await page.get_by_text("Сменить аккаунт", exact=False).first.is_visible(timeout=500):
+                await page.keyboard.press("Escape")
+                await page.wait_for_timeout(300)
+                logger.info("  Закрыто меню профиля вместо меню создания публикации.")
+        except Exception:
+            pass
+
     create_locators = [
+        page.locator('[data-testid="add-publication-button"]'),
+        page.locator('button[data-testid="add-publication-button"]'),
         page.get_by_role("button", name="Создать публикацию", exact=False),
         page.get_by_role("button", name="Создать", exact=False),
         page.get_by_role("button", name="Добавить", exact=False),
@@ -347,11 +376,20 @@ async def _click_create_publication(page) -> None:
         page.locator('[role="button"]:has-text("Создать")'),
     ]
 
-    try:
-        await _click_first_visible(create_locators, "кнопка создания публикации")
-        return
-    except RuntimeError:
-        pass
+    for idx, loc in enumerate(create_locators, start=1):
+        try:
+            el = loc.first if hasattr(loc, "first") else loc
+            await el.wait_for(state="visible", timeout=2500)
+            await close_wrong_menu()
+            await el.click(timeout=3000, force=idx <= 2)
+            await page.wait_for_timeout(700)
+            if await article_option_is_visible():
+                print("  OK: кнопка создания публикации")
+                logger.info("  Clicked create publication locator #%s", idx)
+                return
+            await close_wrong_menu()
+        except Exception:
+            continue
 
     clicked = await page.evaluate(
         """
@@ -364,30 +402,42 @@ async def _click_create_publication(page) -> None:
                     && rect.width > 0
                     && rect.height > 0;
             };
-            const controls = Array.from(document.querySelectorAll('button, [role="button"]'))
-                .filter(isVisible)
-                .map((el) => ({ el, rect: el.getBoundingClientRect(), text: (el.innerText || el.textContent || '').trim() }))
-                .filter(({ rect }) => rect.x > window.innerWidth * 0.65 && rect.y < 180 && rect.width >= 24 && rect.height >= 24)
-                .sort((a, b) => (b.rect.x - a.rect.x) || (a.rect.y - b.rect.y));
+            const textOf = (el) => [
+                el.innerText,
+                el.textContent,
+                el.getAttribute('aria-label'),
+                el.getAttribute('title'),
+                el.getAttribute('data-testid'),
+                el.getAttribute('class'),
+            ].filter(Boolean).join(' ');
 
-            const plus = controls.find(({ el, text }) => {
-                const aria = el.getAttribute('aria-label') || '';
-                const title = el.getAttribute('title') || '';
-                return text === '+' || /созд|добав|плюс|plus|create|add/i.test([aria, title, text].join(' '));
-            }) || controls[0];
+            const controls = Array.from(document.querySelectorAll('button, [role="button"], a'))
+                .filter(isVisible)
+                .filter((el) => !el.disabled && el.getAttribute('aria-disabled') !== 'true')
+                .map((el) => ({ el, rect: el.getBoundingClientRect(), text: textOf(el) }))
+                .filter(({ rect }) => rect.x > window.innerWidth * 0.55 && rect.y < 140 && rect.width >= 24 && rect.height >= 24);
+
+            const plus = controls.find(({ text }) => /add-publication-button/i.test(text))
+                || controls.find(({ text }) => /созд|добав|плюс|plus|create|add/i.test(text));
 
             if (!plus) {
                 return false;
             }
+            plus.el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+            plus.el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            plus.el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
             plus.el.click();
             return true;
         }
         """
     )
     if clicked:
-        print("  OK: кнопка создания публикации")
-        logger.info("  Clicked create publication by JS top-right fallback")
-        return
+        await page.wait_for_timeout(700)
+        if await article_option_is_visible():
+            print("  OK: кнопка создания публикации")
+            logger.info("  Clicked create publication by JS top-right fallback")
+            return
+        await close_wrong_menu()
 
     await _save_debug_screenshot(page, "missing_create_publication")
     await _log_visible_controls(page, "missing create publication")
@@ -524,6 +574,67 @@ async def _click_publish_fallback_button(page, label: str, pattern: str) -> bool
     return False
 
 
+async def _click_visible_button_by_text(page, label: str, pattern: str) -> bool:
+    clicked = await page.evaluate(
+        """
+        ({ pattern }) => {
+            const re = new RegExp(pattern, 'i');
+            const isVisible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.visibility !== 'hidden'
+                    && style.display !== 'none'
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const isEnabled = (el) => !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+            const textOf = (el) => [
+                el.innerText,
+                el.textContent,
+                el.getAttribute('aria-label'),
+                el.getAttribute('title'),
+            ].filter(Boolean).join(' ').replace(/\\s+/g, ' ').trim();
+
+            const buttons = Array.from(document.querySelectorAll('button, [role="button"]'))
+                .filter((el) => isVisible(el) && isEnabled(el) && re.test(textOf(el)))
+                .map((el) => ({ el, rect: el.getBoundingClientRect() }))
+                .sort((a, b) => (b.rect.width * b.rect.height) - (a.rect.width * a.rect.height));
+
+            const target = buttons[0]?.el;
+            if (!target) {
+                return false;
+            }
+            target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+            target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+            target.click();
+            return true;
+        }
+        """,
+        {"pattern": pattern},
+    )
+    if clicked:
+        print(f"  OK: {label}")
+        logger.info("  Clicked %s by visible text JS", label)
+        return True
+    return False
+
+
+async def _wait_dzen_autosave(page) -> None:
+    try:
+        await page.wait_for_function(
+            """
+            () => {
+                const text = document.body?.innerText || '';
+                return !/ид[её]т сохранение|сохраняется/i.test(text);
+            }
+            """,
+            timeout=20000,
+        )
+    except Exception:
+        logger.warning("Не удалось дождаться окончания автосохранения Дзена, пробуем продолжить")
+
+
 async def _insert_header_image(page, body_el, image_bytes: bytes | None) -> bool:
     if not image_bytes:
         logger.info("Картинка для Дзена не передана, публикуем только текст")
@@ -601,38 +712,50 @@ async def _auto_publish_article(page) -> None:
     await _save_debug_screenshot(page, "before_dzen_next")
     await _log_visible_controls(page, "before next")
 
-    _log_step("Нажимаю Далее")
-    try:
-        await _click_first_enabled([
-            page.get_by_role("button", name="Далее", exact=True),
-            page.get_by_role("button", name="Далее", exact=False),
-            page.get_by_role("button", name="Продолжить", exact=True),
-            page.get_by_role("button", name="Продолжить", exact=False),
-            page.get_by_label("Далее", exact=False),
-            page.get_by_label("Продолжить", exact=False),
-            page.locator('button:has-text("Далее")'),
-            page.locator('[role="button"]:has-text("Далее")'),
-            page.locator('button:has-text("Продолжить")'),
-            page.locator('[role="button"]:has-text("Продолжить")'),
-            page.locator('button[aria-label*="далее" i]'),
-            page.locator('[role="button"][aria-label*="далее" i]'),
-            page.locator('button[title*="далее" i]'),
-            page.locator('[role="button"][title*="далее" i]'),
-            page.locator('button[aria-label*="next" i]'),
-            page.locator('[role="button"][aria-label*="next" i]'),
-            page.locator('button[title*="next" i]'),
-            page.locator('[role="button"][title*="next" i]'),
-            page.locator('[data-testid*="next" i]'),
-            page.locator('[data-testid*="publish" i] button').last,
-            page.locator('button[type="submit"]').last,
-        ], "кнопка «Далее» для публикации")
-    except RuntimeError:
-        if not await _click_publish_fallback_button(
-            page,
-            "кнопка «Далее» для публикации",
-            "далее|продолж|next|publish|публик|arrow|submit",
-        ):
-            raise
+    await _wait_dzen_autosave(page)
+
+    _log_step("Нажимаю переход к настройкам публикации")
+    if not await _click_visible_button_by_text(
+        page,
+        "кнопка перехода к настройкам публикации",
+        "далее|продолжить|опубликовать",
+    ):
+        try:
+            await _click_first_enabled([
+                page.get_by_role("button", name="Далее", exact=True),
+                page.get_by_role("button", name="Далее", exact=False),
+                page.get_by_role("button", name="Продолжить", exact=True),
+                page.get_by_role("button", name="Продолжить", exact=False),
+                page.get_by_role("button", name="Опубликовать", exact=True),
+                page.get_by_role("button", name="Опубликовать", exact=False),
+                page.get_by_label("Далее", exact=False),
+                page.get_by_label("Продолжить", exact=False),
+                page.get_by_label("Опубликовать", exact=False),
+                page.locator('button:has-text("Далее")'),
+                page.locator('[role="button"]:has-text("Далее")'),
+                page.locator('button:has-text("Продолжить")'),
+                page.locator('[role="button"]:has-text("Продолжить")'),
+                page.locator('button:has-text("Опубликовать")'),
+                page.locator('[role="button"]:has-text("Опубликовать")'),
+                page.locator('button[aria-label*="далее" i]'),
+                page.locator('[role="button"][aria-label*="далее" i]'),
+                page.locator('button[title*="далее" i]'),
+                page.locator('[role="button"][title*="далее" i]'),
+                page.locator('button[aria-label*="next" i]'),
+                page.locator('[role="button"][aria-label*="next" i]'),
+                page.locator('button[title*="next" i]'),
+                page.locator('[role="button"][title*="next" i]'),
+                page.locator('[data-testid*="next" i]'),
+                page.locator('[data-testid*="publish" i] button').last,
+                page.locator('button[type="submit"]').last,
+            ], "кнопка перехода к настройкам публикации")
+        except RuntimeError:
+            if not await _click_publish_fallback_button(
+                page,
+                "кнопка перехода к настройкам публикации",
+                "далее|продолж|next|publish|публик|arrow|submit",
+            ):
+                raise
 
     try:
         await page.wait_for_load_state("networkidle", timeout=15000)
@@ -644,41 +767,76 @@ async def _auto_publish_article(page) -> None:
     await _log_visible_controls(page, "before publish")
 
     _log_step("Нажимаю Опубликовать")
+    if not await _click_visible_button_by_text(
+        page,
+        "финальная кнопка «Опубликовать»",
+        "опубликовать|разместить",
+    ):
+        try:
+            await _click_first_enabled([
+                page.get_by_role("button", name="Опубликовать", exact=True),
+                page.get_by_role("button", name="Опубликовать", exact=False),
+                page.get_by_role("button", name="Опубликовать сейчас", exact=False),
+                page.get_by_role("button", name="Разместить", exact=False),
+                page.get_by_label("Опубликовать", exact=False),
+                page.get_by_label("Разместить", exact=False),
+                page.locator('button:has-text("Опубликовать")'),
+                page.locator('[role="button"]:has-text("Опубликовать")'),
+                page.locator('button:has-text("Разместить")'),
+                page.locator('[role="button"]:has-text("Разместить")'),
+                page.locator('button[aria-label*="публик" i]'),
+                page.locator('[role="button"][aria-label*="публик" i]'),
+                page.locator('button[title*="публик" i]'),
+                page.locator('[role="button"][title*="публик" i]'),
+                page.locator('button[aria-label*="размест" i]'),
+                page.locator('[role="button"][aria-label*="размест" i]'),
+                page.locator('button[title*="размест" i]'),
+                page.locator('[role="button"][title*="размест" i]'),
+                page.locator('[data-testid*="publish" i]'),
+                page.locator('button[type="submit"]').last,
+                page.locator('footer button').last,
+                page.locator('[class*="footer" i] button').last,
+                page.locator('[class*="publish" i] button').last,
+            ], "финальная кнопка «Опубликовать»")
+        except RuntimeError:
+            if not await _click_publish_fallback_button(
+                page,
+                "финальная кнопка «Опубликовать»",
+                "опубликов|размест|publish|submit",
+            ):
+                raise
+
     try:
-        await _click_first_enabled([
-            page.get_by_role("button", name="Опубликовать", exact=True),
-            page.get_by_role("button", name="Опубликовать", exact=False),
-            page.get_by_role("button", name="Опубликовать сейчас", exact=False),
-            page.get_by_role("button", name="Разместить", exact=False),
-            page.get_by_label("Опубликовать", exact=False),
-            page.get_by_label("Разместить", exact=False),
-            page.locator('button:has-text("Опубликовать")'),
-            page.locator('[role="button"]:has-text("Опубликовать")'),
-            page.locator('button:has-text("Разместить")'),
-            page.locator('[role="button"]:has-text("Разместить")'),
-            page.locator('button[aria-label*="публик" i]'),
-            page.locator('[role="button"][aria-label*="публик" i]'),
-            page.locator('button[title*="публик" i]'),
-            page.locator('[role="button"][title*="публик" i]'),
-            page.locator('button[aria-label*="размест" i]'),
-            page.locator('[role="button"][aria-label*="размест" i]'),
-            page.locator('button[title*="размест" i]'),
-            page.locator('[role="button"][title*="размест" i]'),
-            page.locator('[data-testid*="publish" i]'),
-            page.locator('button[type="submit"]').last,
-            page.locator('footer button').last,
-            page.locator('[class*="footer" i] button').last,
-            page.locator('[class*="publish" i] button').last,
-        ], "финальная кнопка «Опубликовать»")
-    except RuntimeError:
-        if not await _click_publish_fallback_button(
+        await page.wait_for_load_state("networkidle", timeout=15000)
+    except Exception:
+        await page.wait_for_timeout(2000)
+
+    for loc in [
+        page.get_by_role("button", name="Всё равно опубликовать", exact=False),
+        page.get_by_role("button", name="Подтвердить", exact=False),
+        page.get_by_role("button", name="Продолжить", exact=False),
+        page.locator('button:has-text("Всё равно опубликовать")'),
+        page.locator('button:has-text("Подтвердить")'),
+        page.locator('button:has-text("Продолжить")'),
+    ]:
+        try:
+            el = loc.first if hasattr(loc, "first") else loc
+            if await el.is_visible(timeout=1200):
+                await el.click(timeout=2000, force=True)
+                logger.info("  Clicked extra publish confirmation")
+                break
+        except Exception:
+            continue
+
+    if not await _published_or_left_editor(page):
+        if await _click_publish_fallback_button(
             page,
             "финальная кнопка «Опубликовать»",
             "опубликов|размест|publish|submit",
-        ):
-            raise
+        ) and await _published_or_left_editor(page):
+            _log_step("Статья опубликована в Дзене")
+            return
 
-    if not await _published_or_left_editor(page):
         await _save_debug_screenshot(page, "dzen_publish_not_confirmed")
         await _log_visible_controls(page, "publish not confirmed")
         raise RuntimeError("После клика по публикации статья осталась в редакторе Дзена")
