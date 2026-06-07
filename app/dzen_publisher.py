@@ -268,6 +268,132 @@ async def _wait_element(locators: list, label: str, timeout: int = 8000):
     raise RuntimeError(f"Поле не найдено: {label}")
 
 
+async def _wait_for_dzen_studio(page) -> None:
+    try:
+        await page.wait_for_load_state("networkidle", timeout=15000)
+    except Exception:
+        await page.wait_for_timeout(1500)
+
+    studio_markers = [
+        page.get_by_text("Студия", exact=False),
+        page.get_by_text("Публикации", exact=False),
+        page.get_by_text("Статистика", exact=False),
+        page.locator('[href*="studio"], [data-testid*="studio" i]'),
+        page.locator('button[aria-label*="созд" i], [role="button"][aria-label*="созд" i]'),
+    ]
+    for loc in studio_markers:
+        try:
+            if await loc.first.is_visible(timeout=2500):
+                logger.info("Dzen studio marker found")
+                return
+        except Exception:
+            continue
+
+    logger.warning("Не удалось подтвердить переход в студию Дзена")
+    await _save_debug_screenshot(page, "dzen_studio_not_confirmed")
+    await _log_visible_controls(page, "studio not confirmed")
+
+
+async def _wait_for_article_editor(page) -> None:
+    try:
+        await page.wait_for_url("**/profile/editor/id/**", timeout=20000)
+    except Exception:
+        try:
+            await page.wait_for_url("**/editor/**", timeout=10000)
+        except Exception:
+            pass
+
+    try:
+        await page.wait_for_load_state("networkidle", timeout=15000)
+    except Exception:
+        await page.wait_for_timeout(1500)
+
+    editor_markers = [
+        page.get_by_placeholder("Заголовок"),
+        page.locator('[placeholder*="аголовок"]'),
+        page.get_by_placeholder("Начните писать"),
+        page.get_by_placeholder("Текст статьи"),
+        page.locator('[contenteditable="true"]').first,
+    ]
+    for loc in editor_markers:
+        try:
+            if await loc.first.is_visible(timeout=2500):
+                logger.info("Dzen editor marker found")
+                return
+        except Exception:
+            continue
+
+    await _save_debug_screenshot(page, "dzen_editor_not_opened")
+    await _log_visible_controls(page, "editor not opened")
+    raise RuntimeError("Редактор статьи Дзена не открылся")
+
+
+async def _click_create_publication(page) -> None:
+    create_locators = [
+        page.get_by_role("button", name="Создать публикацию", exact=False),
+        page.get_by_role("button", name="Создать", exact=False),
+        page.get_by_role("button", name="Добавить", exact=False),
+        page.get_by_label("Создать публикацию", exact=False),
+        page.get_by_label("Создать", exact=False),
+        page.get_by_label("Добавить", exact=False),
+        page.locator('[aria-label*="созд" i]'),
+        page.locator('[aria-label*="добав" i]'),
+        page.locator('[title*="созд" i]'),
+        page.locator('[title*="добав" i]'),
+        page.locator('[data-testid*="create" i]'),
+        page.locator('[data-testid*="add" i]'),
+        page.locator('button:has-text("Создать публикацию")'),
+        page.locator('button:has-text("Создать")'),
+        page.locator('[role="button"]:has-text("Создать")'),
+    ]
+
+    try:
+        await _click_first_visible(create_locators, "кнопка создания публикации")
+        return
+    except RuntimeError:
+        pass
+
+    clicked = await page.evaluate(
+        """
+        () => {
+            const isVisible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.visibility !== 'hidden'
+                    && style.display !== 'none'
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const controls = Array.from(document.querySelectorAll('button, [role="button"]'))
+                .filter(isVisible)
+                .map((el) => ({ el, rect: el.getBoundingClientRect(), text: (el.innerText || el.textContent || '').trim() }))
+                .filter(({ rect }) => rect.x > window.innerWidth * 0.65 && rect.y < 180 && rect.width >= 24 && rect.height >= 24)
+                .sort((a, b) => (b.rect.x - a.rect.x) || (a.rect.y - b.rect.y));
+
+            const plus = controls.find(({ el, text }) => {
+                const aria = el.getAttribute('aria-label') || '';
+                const title = el.getAttribute('title') || '';
+                return text === '+' || /созд|добав|плюс|plus|create|add/i.test([aria, title, text].join(' '));
+            }) || controls[0];
+
+            if (!plus) {
+                return false;
+            }
+            plus.el.click();
+            return true;
+        }
+        """
+    )
+    if clicked:
+        print("  OK: кнопка создания публикации")
+        logger.info("  Clicked create publication by JS top-right fallback")
+        return
+
+    await _save_debug_screenshot(page, "missing_create_publication")
+    await _log_visible_controls(page, "missing create publication")
+    raise RuntimeError("Элемент не найден: кнопка создания публикации")
+
+
 def _save_temp_image(image_bytes: bytes) -> Path:
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
     try:
@@ -596,16 +722,27 @@ async def publish_draft(
 
             await page.wait_for_timeout(800)
 
-            _log_step("Нажимаю Создать публикацию")
+            _log_step("Нажимаю Студия")
             await _click_first_visible([
-                page.get_by_text("Создать публикацию", exact=True),
-                page.get_by_text("Создать публикацию", exact=False),
-                page.locator('[role="menuitem"]:has-text("Создать публикацию")'),
-                page.locator('li:has-text("Создать публикацию")'),
-                page.locator('a:has-text("Создать публикацию")'),
-                page.locator('button:has-text("Создать публикацию")'),
-                page.locator('span:has-text("Создать публикацию")'),
-            ], "«Создать публикацию»")
+                page.get_by_role("button", name="Перейти в студию", exact=False),
+                page.get_by_label("Перейти в студию", exact=False),
+                page.get_by_text("Перейти в студию", exact=False),
+                page.get_by_text("Студия", exact=True),
+                page.get_by_text("Студия", exact=False),
+                page.locator('[aria-label*="студи" i]'),
+                page.locator('[title*="студи" i]'),
+                page.locator('[href*="studio"]'),
+                page.locator('a:has-text("Студия")'),
+                page.locator('button:has-text("Студия")'),
+            ], "«Студия»")
+
+            _log_step("Жду студию")
+            await _wait_for_dzen_studio(page)
+
+            await page.wait_for_timeout(600)
+
+            _log_step("Нажимаю плюс для публикации")
+            await _click_create_publication(page)
 
             await page.wait_for_timeout(600)
 
@@ -621,15 +758,7 @@ async def publish_draft(
             ], "«Написать статью»")
 
             _log_step("Жду редактор")
-            try:
-                await page.wait_for_url("**/profile/editor/id/**", timeout=25000)
-            except Exception:
-                try:
-                    await page.wait_for_url("**/editor/**", timeout=10000)
-                except Exception:
-                    await page.wait_for_load_state("networkidle", timeout=15000)
-
-            await page.wait_for_load_state("networkidle")
+            await _wait_for_article_editor(page)
             logger.info("Dzen editor URL: %s", page.url)
             await _dismiss_editor_popups(page)
 

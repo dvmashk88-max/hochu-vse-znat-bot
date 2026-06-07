@@ -1,7 +1,7 @@
 # Хочу всё знать — Telegram-бот
 
 Автоматическая генерация и публикация образовательного контента в Telegram-канал с помощью AI.
-Текст постов генерируется через [OpenRouter API](https://openrouter.ai), изображения — через Unsplash и Pexels.
+Текст постов генерируется через [OpenRouter API](https://openrouter.ai), изображения — через Pexels и Pixabay.
 
 **Требования:** Python 3.12+
 
@@ -13,7 +13,7 @@ app/
   config.py         — переменные окружения
   bot.py            — Telegram Bot API (отправка сообщений/фото)
   generator.py      — генерация текста поста через LLM
-  images.py         — поиск и загрузка изображений (Unsplash → Pexels)
+  images.py         — поиск и загрузка изображений (Pexels → Pixabay)
   db.py             — хранение тем и истории публикаций
   scheduler.py      — планировщик автопубликаций (APScheduler)
   publisher.py      — оркестрация: тема → текст → фото → публикация
@@ -50,8 +50,8 @@ python3.12 -c "import asyncio; from app.publisher import publish_next_post; asyn
 | `TELEGRAM_BOT_TOKEN` | Токен бота от @BotFather |
 | `TELEGRAM_CHANNEL_ID` | ID или @username канала |
 | `OPENROUTER_API_KEY` | Ключ OpenRouter API (openrouter.ai) |
-| `UNSPLASH_ACCESS_KEY` | Access Key от Unsplash API |
-| `PEXELS_API_KEY` | Ключ Pexels API для резервного поиска изображений |
+| `PEXELS_API_KEY` | Ключ Pexels API для основного поиска изображений |
+| `PIXABAY_API_KEY` | Ключ Pixabay API для резервного поиска изображений |
 | `DATABASE_URL` | URL базы данных (по умолчанию SQLite) |
 | `POST_INTERVAL_HOURS` | Интервал публикаций в часах (по умолчанию 6) |
 | `DZEN_CHANNEL_URL` | URL канала Дзена |

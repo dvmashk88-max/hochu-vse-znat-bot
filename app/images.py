@@ -4,7 +4,7 @@ import urllib3
 import requests
 import random
 from typing import Optional
-from app.config import UNSPLASH_ACCESS_KEY, PEXELS_API_KEY
+from app.config import PEXELS_API_KEY, PIXABAY_API_KEY
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -157,26 +157,6 @@ def _pick_url(urls: list[str]) -> Optional[str]:
     return random.choice(urls)
 
 
-def _unsplash(query: str) -> Optional[str]:
-    if not UNSPLASH_ACCESS_KEY:
-        return None
-    try:
-        resp = requests.get(
-            "https://api.unsplash.com/search/photos",
-            params={"query": query, "per_page": 10, "orientation": "landscape"},
-            headers={**_HEADERS, "Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"},
-            timeout=30,
-            verify=False,
-        )
-        resp.raise_for_status()
-        results = resp.json().get("results", [])
-        urls = [item["urls"]["regular"] for item in results if item.get("urls", {}).get("regular")]
-        return _pick_url(urls)
-    except Exception as e:
-        logger.warning("Unsplash error: %s", e)
-    return None
-
-
 def _pexels(query: str) -> Optional[str]:
     if not PEXELS_API_KEY:
         return None
@@ -197,6 +177,39 @@ def _pexels(query: str) -> Optional[str]:
     return None
 
 
+def _pixabay(query: str) -> Optional[str]:
+    if not PIXABAY_API_KEY:
+        return None
+    try:
+        resp = requests.get(
+            "https://pixabay.com/api/",
+            params={
+                "key": PIXABAY_API_KEY,
+                "q": query,
+                "image_type": "photo",
+                "orientation": "horizontal",
+                "safesearch": "true",
+                "per_page": 20,
+                "min_width": 1000,
+                "min_height": 600,
+            },
+            headers=_HEADERS,
+            timeout=30,
+            verify=False,
+        )
+        resp.raise_for_status()
+        hits = resp.json().get("hits", [])
+        urls = [
+            item.get("largeImageURL") or item.get("webformatURL")
+            for item in hits
+            if item.get("largeImageURL") or item.get("webformatURL")
+        ]
+        return _pick_url(urls)
+    except Exception as e:
+        logger.warning("Pixabay error: %s", e)
+    return None
+
+
 def _download(url: str) -> bytes:
     resp = requests.get(url, headers=_HEADERS, timeout=30, verify=False)
     resp.raise_for_status()
@@ -204,10 +217,10 @@ def _download(url: str) -> bytes:
 
 
 async def fetch_image(query: str) -> Optional[bytes]:
-    url = await asyncio.to_thread(_unsplash, query)
+    url = await asyncio.to_thread(_pexels, query)
     if not url:
-        logger.info("Unsplash returned nothing, trying Pexels")
-        url = await asyncio.to_thread(_pexels, query)
+        logger.info("Pexels returned nothing, trying Pixabay")
+        url = await asyncio.to_thread(_pixabay, query)
     if not url:
         logger.warning("No image found for query: %s", query)
         return None
