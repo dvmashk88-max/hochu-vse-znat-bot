@@ -454,6 +454,13 @@ def _save_temp_image(image_bytes: bytes) -> Path:
 
 
 async def _upload_image_file(page, image_path: Path) -> bool:
+    file_upload_buttons = [
+        page.get_by_role("button", name="Загрузите файл", exact=False),
+        page.get_by_role("button", name="Загрузить файл", exact=False),
+        page.get_by_text("Загрузите файл", exact=False),
+        page.locator('button:has-text("Загрузите файл")'),
+        page.locator('button:has-text("Загрузить файл")'),
+    ]
     upload_buttons = [
         page.get_by_role("button", name="Добавить изображение", exact=False),
         page.get_by_role("button", name="Добавить картинку", exact=False),
@@ -471,7 +478,9 @@ async def _upload_image_file(page, image_path: Path) -> bool:
         page.locator('[role="button"][aria-label*="изображ" i]'),
         page.locator('[role="button"][aria-label*="картин" i]'),
         page.locator('[role="button"][aria-label*="фото" i]'),
+        *file_upload_buttons,
         page.locator('button:has(svg)').filter(has_text="").last,
+        *file_upload_buttons,
     ]
 
     for input_loc in [
@@ -503,6 +512,7 @@ async def _upload_image_file(page, image_path: Path) -> bool:
 
 
 async def _wait_image_uploaded(page) -> bool:
+    image_found = False
     for loc in [
         page.locator('article img, [contenteditable="true"] img').first,
         page.locator('img[src^="blob:"], img[src^="data:"], img[src*="avatars"], img[src*="zen"]').first,
@@ -510,10 +520,35 @@ async def _wait_image_uploaded(page) -> bool:
     ]:
         try:
             await loc.wait_for(state="visible", timeout=15000)
-            return True
+            image_found = True
+            break
         except Exception:
             continue
-    return False
+
+    if not image_found:
+        return False
+
+    try:
+        await page.wait_for_function(
+            """
+            () => {
+                const text = document.body?.innerText || '';
+                return !/загружается|ид[её]т загрузка|uploading/i.test(text);
+            }
+            """,
+            timeout=60000,
+        )
+    except Exception:
+        logger.warning("Картинка появилась в редакторе Дзена, но загрузка не завершилась")
+        return False
+
+    try:
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(500)
+    except Exception:
+        pass
+
+    return True
 
 
 async def _click_publish_fallback_button(page, label: str, pattern: str) -> bool:
@@ -676,7 +711,31 @@ async def _insert_header_image(page, body_el, image_bytes: bytes | None) -> bool
 async def _append_text_after_media(page, body_el, text: str) -> None:
     await _dismiss_editor_popups(page)
     try:
-        await body_el.click(timeout=8000, force=True)
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(300)
+        image_point = await page.evaluate(
+            """
+            () => {
+                const visibleImages = Array.from(document.querySelectorAll('img'))
+                    .map((img) => ({ img, rect: img.getBoundingClientRect() }))
+                    .filter(({ rect }) => rect.width > 100 && rect.height > 100);
+                const last = visibleImages.at(-1);
+                if (!last) {
+                    return null;
+                }
+                last.img.scrollIntoView({ block: 'center', inline: 'nearest' });
+                const rect = last.img.getBoundingClientRect();
+                return {
+                    x: Math.max(20, Math.min(window.innerWidth - 40, rect.left + 24)),
+                    y: Math.max(20, Math.min(window.innerHeight - 40, rect.bottom + 56)),
+                };
+            }
+            """
+        )
+        if image_point:
+            await page.mouse.click(image_point["x"], image_point["y"])
+        else:
+            await body_el.click(timeout=8000, force=True)
         await page.keyboard.press("Control+End")
         await page.keyboard.press("Enter")
         await page.keyboard.insert_text(text)
@@ -684,6 +743,19 @@ async def _append_text_after_media(page, body_el, text: str) -> None:
     except Exception:
         logger.warning("  Не удалось вставить текст после картинки, пробуем обычный ввод...")
         await _type_into(page, body_el, text)
+
+
+async def _editor_contains_text(page, text: str) -> bool:
+    expected = " ".join(text.strip().split())[:40]
+    if not expected:
+        return True
+
+    body_text = await page.evaluate(
+        """
+        () => (document.body?.innerText || '').replace(/\\s+/g, ' ').trim()
+        """
+    )
+    return expected in body_text
 
 
 async def _published_or_left_editor(page) -> bool:
@@ -954,8 +1026,8 @@ async def publish_draft(
                 await _type_into(page, body_el, text)
 
             await page.wait_for_timeout(500)
-            body_text = await page.locator('[contenteditable="true"]').last.inner_text()
-            if len(body_text.strip()) < min(20, len(text.strip())):
+            if not await _editor_contains_text(page, text):
+                await _save_debug_screenshot(page, "dzen_text_after_image_missing")
                 raise RuntimeError("Текст статьи не появился в редакторе Дзена")
 
             if not DZEN_AUTO_PUBLISH:
