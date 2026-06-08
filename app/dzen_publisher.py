@@ -1030,6 +1030,8 @@ async def publish_draft(
                 await _save_debug_screenshot(page, "dzen_text_after_image_missing")
                 raise RuntimeError("Текст статьи не появился в редакторе Дзена")
 
+            await _wait_dzen_autosave(page)
+
             if not DZEN_AUTO_PUBLISH:
                 _log_step("Черновик Дзена создан")
                 return "draft"
