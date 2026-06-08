@@ -17,6 +17,8 @@ app/
   db.py             — хранение тем и истории публикаций
   scheduler.py      — планировщик автопубликаций (APScheduler)
   publisher.py      — оркестрация: тема → текст → фото → публикация
+  dzen_publisher.py — публикация в Дзен через Playwright
+  max_publisher.py  — публикация в MAX через Bot API
   topic_selector.py — выбор следующей незатронутой темы
 
 prompts/
@@ -59,6 +61,8 @@ python3.12 -c "import asyncio; from app.publisher import publish_next_post; asyn
 | `DZEN_AUTO_PUBLISH` | Автопубликация статей в Дзен (`false` по умолчанию) |
 | `DZEN_DEBUG_SCREENSHOTS` | Сохранять debug-скриншоты Дзена при публикации (`true` по умолчанию) |
 | `DZEN_DEBUG_DIR` | Папка для debug-скриншотов Дзена (`storage/dzen_debug` по умолчанию) |
+| `MAX_BOT_TOKEN` | Токен бота MAX |
+| `MAX_CHANNEL_ID` | Числовой ID канала MAX |
 
 ## Деплой на Railway
 

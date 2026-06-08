@@ -15,3 +15,5 @@ DZEN_STORAGE_STATE_JSON = os.getenv("DZEN_STORAGE_STATE_JSON", "")
 DZEN_AUTO_PUBLISH = os.getenv("DZEN_AUTO_PUBLISH", "false").lower() == "true"
 DZEN_DEBUG_SCREENSHOTS = os.getenv("DZEN_DEBUG_SCREENSHOTS", "true").lower() == "true"
 DZEN_DEBUG_DIR = os.getenv("DZEN_DEBUG_DIR", "storage/dzen_debug")
+MAX_BOT_TOKEN = os.getenv("MAX_BOT_TOKEN", "")
+MAX_CHANNEL_ID = os.getenv("MAX_CHANNEL_ID", "")
