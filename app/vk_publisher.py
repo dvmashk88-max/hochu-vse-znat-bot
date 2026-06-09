@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 import requests
 
 from app.config import VK_ACCESS_TOKEN, VK_GROUP_ID
+
+logger = logging.getLogger(__name__)
 
 _API_URL = "https://api.vk.com/method"
 _API_VERSION = "5.199"
@@ -104,7 +107,10 @@ def _publish_post(text: str, image_bytes: bytes | None = None) -> str:
     }
 
     if image_bytes:
-        params["attachments"] = _upload_wall_photo(group_id, image_bytes)
+        try:
+            params["attachments"] = _upload_wall_photo(group_id, image_bytes)
+        except Exception as e:
+            logger.warning("Failed to upload image to VK; publishing text only: %s", e)
 
     post = _call_vk("wall.post", params)
     post_id = post.get("post_id")
