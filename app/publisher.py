@@ -3,10 +3,16 @@ from app.bot import send_text, send_photo_with_caption
 from app.generator import generate_post
 from app.images import fetch_image, generate_image_query
 from app.topic_selector import pick_next_topic
-from app.db import save_dzen_publication_status, save_max_publication_status, save_published_topic
+from app.db import (
+    save_dzen_publication_status,
+    save_max_publication_status,
+    save_published_topic,
+    save_vk_publication_status,
+)
 from app.config import TELEGRAM_CHANNEL_ID
 from app.dzen_publisher import publish_draft
 from app.max_publisher import publish_to_max
+from app.vk_publisher import publish_to_vk
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +53,15 @@ async def publish_next_post() -> None:
     else:
         save_max_publication_status(topic, "published", message_id=max_message_id)
         logger.info("MAX publication for '%s': %s", topic, max_message_id)
+
+    try:
+        vk_post_id = await publish_to_vk(text=text, image_bytes=image_bytes)
+    except Exception as e:
+        save_vk_publication_status(topic, "failed", error=str(e))
+        logger.error("Failed to publish post to VK: %s", e)
+    else:
+        save_vk_publication_status(topic, "published", post_id=vk_post_id)
+        logger.info("VK publication for '%s': %s", topic, vk_post_id)
 
     try:
         dzen_status = await publish_draft(title=topic, text=text, image_bytes=image_bytes)

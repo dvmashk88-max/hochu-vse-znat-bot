@@ -19,6 +19,7 @@ app/
   publisher.py      — оркестрация: тема → текст → фото → публикация
   dzen_publisher.py — публикация в Дзен через Playwright
   max_publisher.py  — публикация в MAX через Bot API
+  vk_publisher.py   — публикация в VK через VK API
   topic_selector.py — выбор следующей незатронутой темы
 
 prompts/
@@ -63,6 +64,8 @@ python3.12 -c "import asyncio; from app.publisher import publish_next_post; asyn
 | `DZEN_DEBUG_DIR` | Папка для debug-скриншотов Дзена (`storage/dzen_debug` по умолчанию) |
 | `MAX_BOT_TOKEN` | Токен бота MAX |
 | `MAX_CHANNEL_ID` | Числовой ID канала MAX |
+| `VK_ACCESS_TOKEN` | Access token сообщества VK с правами `wall` и `photos` |
+| `VK_GROUP_ID` | Числовой ID сообщества VK без минуса |
 
 ## Деплой на Railway
 

@@ -17,3 +17,5 @@ DZEN_DEBUG_SCREENSHOTS = os.getenv("DZEN_DEBUG_SCREENSHOTS", "true").lower() == 
 DZEN_DEBUG_DIR = os.getenv("DZEN_DEBUG_DIR", "storage/dzen_debug")
 MAX_BOT_TOKEN = os.getenv("MAX_BOT_TOKEN", "")
 MAX_CHANNEL_ID = os.getenv("MAX_CHANNEL_ID", "")
+VK_ACCESS_TOKEN = os.getenv("VK_ACCESS_TOKEN", "")
+VK_GROUP_ID = os.getenv("VK_GROUP_ID", "")
