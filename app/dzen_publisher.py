@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 STORAGE_DIR = Path("storage")
 COOKIES_FILE = STORAGE_DIR / "dzen_cookies.json"
 DEBUG_DIR = Path(DZEN_DEBUG_DIR)
+DZEN_OPEN_RETRIES = 3
 
 
 def _log_step(message: str) -> None:
@@ -670,6 +671,31 @@ async def _wait_dzen_autosave(page) -> None:
         logger.warning("Не удалось дождаться окончания автосохранения Дзена, пробуем продолжить")
 
 
+async def _open_dzen_channel(page) -> None:
+    last_error: Exception | None = None
+
+    for attempt in range(1, DZEN_OPEN_RETRIES + 1):
+        try:
+            logger.info("Opening Dzen channel attempt %s/%s", attempt, DZEN_OPEN_RETRIES)
+            await page.goto(DZEN_CHANNEL_URL, wait_until="domcontentloaded", timeout=45000)
+            try:
+                await page.wait_for_load_state("load", timeout=10000)
+            except Exception:
+                logger.info("Dzen channel load state did not finish quickly; continuing with DOM")
+
+            logger.info("Dzen URL: %s", page.url)
+            return
+        except Exception as e:
+            last_error = e
+            logger.warning("Не удалось открыть канал Дзена, попытка %s/%s: %s", attempt, DZEN_OPEN_RETRIES, e)
+            await _save_debug_screenshot(page, f"dzen_channel_open_failed_attempt_{attempt}")
+            if attempt < DZEN_OPEN_RETRIES:
+                await page.wait_for_timeout(3000 * attempt)
+
+    await _log_visible_controls(page, "channel open failed")
+    raise RuntimeError(f"Не удалось открыть канал Дзена после {DZEN_OPEN_RETRIES} попыток: {last_error}") from last_error
+
+
 async def _insert_header_image(page, body_el, image_bytes: bytes | None) -> bool:
     if not image_bytes:
         logger.info("Картинка для Дзена не передана, публикуем только текст")
@@ -933,8 +959,7 @@ async def publish_draft(
             page = await context.new_page()
 
             _log_step(f"Открываю канал: {DZEN_CHANNEL_URL}")
-            await page.goto(DZEN_CHANNEL_URL, wait_until="networkidle")
-            logger.info("Dzen URL: %s", page.url)
+            await _open_dzen_channel(page)
 
             _log_step("Нажимаю аватар")
             await _click_first_visible([
