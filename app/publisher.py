@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 
 
 async def publish_next_post() -> None:
-    topic = await pick_next_topic()
+    selected_topic = await pick_next_topic()
+    topic = selected_topic.title
     logger.info("Selected topic: %s", topic)
 
     try:
@@ -42,7 +43,12 @@ async def publish_next_post() -> None:
         logger.error("Failed to send post to Telegram: %s", e)
         return
 
-    save_published_topic(topic)
+    save_published_topic(
+        topic,
+        category=selected_topic.category,
+        angle=selected_topic.angle,
+        keywords=selected_topic.keywords,
+    )
     logger.info("Published topic: %s", topic)
 
     try:

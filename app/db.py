@@ -1,5 +1,6 @@
 import sqlite3
 import re
+from collections.abc import Iterable
 from app.config import DATABASE_URL
 
 
@@ -12,6 +13,16 @@ def _connect() -> sqlite3.Connection:
     return sqlite3.connect(_db_path())
 
 
+def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(row[1] == column for row in rows)
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    if not _column_exists(conn, table, column):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def init_db() -> None:
     with _connect() as conn:
         conn.execute("""
@@ -21,6 +32,9 @@ def init_db() -> None:
                 published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        _ensure_column(conn, "published_topics", "category", "TEXT")
+        _ensure_column(conn, "published_topics", "angle", "TEXT")
+        _ensure_column(conn, "published_topics", "keywords", "TEXT")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS dzen_publications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,15 +67,46 @@ def init_db() -> None:
         conn.commit()
 
 
-def save_published_topic(topic: str) -> None:
+def _serialize_keywords(keywords: Iterable[str] | None) -> str | None:
+    if not keywords:
+        return None
+    return ", ".join(str(keyword).strip() for keyword in keywords if str(keyword).strip())
+
+
+def save_published_topic(
+    topic: str,
+    category: str | None = None,
+    angle: str | None = None,
+    keywords: Iterable[str] | None = None,
+) -> None:
     with _connect() as conn:
-        conn.execute("INSERT OR IGNORE INTO published_topics (topic) VALUES (?)", (topic,))
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO published_topics (topic, category, angle, keywords)
+            VALUES (?, ?, ?, ?)
+            """,
+            (topic, category, angle, _serialize_keywords(keywords)),
+        )
         conn.commit()
 
 
 def get_published_topics() -> list[str]:
     with _connect() as conn:
         rows = conn.execute("SELECT topic FROM published_topics").fetchall()
+    return [row[0] for row in rows]
+
+
+def get_recent_published_topics(limit: int = 50) -> list[str]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT topic
+            FROM published_topics
+            ORDER BY published_at DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
     return [row[0] for row in rows]
 
 

@@ -1,5 +1,26 @@
+import logging
 import random
-from app.db import get_published_topics
+import re
+from dataclasses import dataclass
+from app.db import get_published_topics, get_recent_published_topics
+from app.generator import generate_topic_candidate
+
+logger = logging.getLogger(__name__)
+
+RECENT_TOPICS_LIMIT = 50
+GENERATED_TOPIC_ATTEMPTS = 6
+
+
+@dataclass(frozen=True)
+class TopicSelection:
+    title: str
+    category: str | None = None
+    angle: str | None = None
+    keywords: tuple[str, ...] = ()
+
+    def __str__(self) -> str:
+        return self.title
+
 
 TOPICS = [
     "Почему небо голубое",
@@ -103,12 +124,212 @@ TOPICS = [
     "Как работает интуиция",
     "Почему существуют времена года",
     "Как устроена Международная космическая станция",
+    "Почему старые книги пахнут ванилью",
+    "Как древние люди делали клей из берёзовой коры",
+    "Почему римский бетон крепнет в морской воде",
+    "Как шум меняет вкус еды",
+    "Почему стекло кажется жидким, хотя им не является",
+    "Как муравьи находят короткие маршруты",
+    "Зачем средневековые замки строили с винтовыми лестницами",
+    "Почему самолёты оставляют белые следы в небе",
+    "Как работают музыкальные шкатулки",
+    "Почему осьминоги думают не только головой",
+    "Как археологи читают древние надписи без словаря",
+    "Почему некоторые камни умеют плавать",
+    "Как растения понимают, где верх и низ",
+    "Почему у перца чили появился острый вкус",
+    "Как древние мореплаватели ориентировались без GPS",
+    "Почему бетон трескается и как его лечат бактериями",
+    "Как работает невидимая защита банковской карты",
+    "Почему в пустыне ночью становится холодно",
+    "Как ледяные керны рассказывают о древнем климате",
+    "Почему зеркало меняет лево и право, но не верх и низ",
+    "Как голубой пигмент стал редкостью в истории искусства",
+    "Почему некоторые языки обходятся без слов для чисел",
+    "Как работают шумоподавляющие наушники",
+    "Почему чай темнеет, если в него добавить лимон",
+    "Как древние города справлялись с канализацией",
+    "Почему пыль дома в основном не с улицы",
+    "Как работает эффект плацебо без магии",
+    "Почему запахи так быстро возвращают воспоминания",
+    "Как учёные узнают возраст деревянных построек",
+    "Почему морская вода пенится",
+    "Как работает застёжка-липучка",
+    "Почему бумага желтеет со временем",
+    "Как насекомые ходят по потолку",
+    "Почему у некоторых людей абсолютный слух",
+    "Как древние мастера делали стойкие красители",
+    "Почему молния иногда бывает шаровой",
+    "Как работает термос",
+    "Почему некоторые здания поют на ветру",
+    "Как образуются подземные реки",
+    "Почему сыр пахнет сильнее, чем молоко",
+    "Как работает археологическая радиоуглеродная датировка",
+    "Почему кожа морщится в воде",
+    "Как городские деревья охлаждают улицы",
+    "Почему песок на пляжах бывает разного цвета",
+    "Как работают автоматические двери",
+    "Почему старые фотографии выцветают",
+    "Как древние люди добывали огонь трением",
+    "Почему у часов с маятником такой ровный ход",
+    "Как работают датчики дыма",
+    "Почему разные металлы звучат по-разному",
 ]
 
+_STOPWORDS = {
+    "а", "без", "бы", "в", "во", "вот", "для", "до", "его", "ее", "её", "если",
+    "и", "из", "или", "как", "к", "ко", "на", "но", "о", "об", "от", "по",
+    "почему", "при", "про", "с", "со", "так", "то", "у", "что", "это",
+    "этот", "эта", "эти", "же", "ли", "не", "чем", "откуда",
+}
 
-async def pick_next_topic() -> str:
+_POPULAR_TOPIC_FRAGMENTS = (
+    "черные дыр",
+    "черная дыр",
+    "черн дыр",
+    "чёрн дыр",
+    "динозавр",
+    "нейросет",
+    "небо голуб",
+    "квантов",
+    "днк",
+    "gps",
+    "иммун",
+    "вакцин",
+    "марс",
+    "луна",
+    "атом",
+)
+
+
+def _normalize_topic(topic: str) -> str:
+    topic = topic.lower().replace("ё", "е")
+    topic = re.sub(r"[^a-zа-я0-9\s-]", " ", topic)
+    return re.sub(r"\s+", " ", topic).strip()
+
+
+def _stem_token(token: str) -> str:
+    for ending in (
+        "иями", "ями", "ами", "ого", "его", "ому", "ему", "ыми", "ими",
+        "ых", "их", "ая", "яя", "ое", "ее", "ые", "ие", "ый", "ий",
+        "ой", "ам", "ям", "ах", "ях", "ом", "ем", "ою", "ею", "ью",
+        "ия", "ья", "и", "ы", "а", "я", "у", "ю", "е", "о",
+    ):
+        if len(token) - len(ending) >= 4 and token.endswith(ending):
+            return token[: -len(ending)]
+    return token
+
+
+def _topic_tokens(topic: str) -> set[str]:
+    tokens = set()
+    for token in _normalize_topic(topic).split():
+        token = token.strip("-")
+        if len(token) < 4 or token in _STOPWORDS:
+            continue
+        tokens.add(_stem_token(token))
+    return tokens
+
+
+def _similarity(left: str, right: str) -> float:
+    left_norm = _normalize_topic(left)
+    right_norm = _normalize_topic(right)
+    if not left_norm or not right_norm:
+        return 0.0
+    if left_norm == right_norm:
+        return 1.0
+    if left_norm in right_norm or right_norm in left_norm:
+        return 0.85
+
+    left_tokens = _topic_tokens(left_norm)
+    right_tokens = _topic_tokens(right_norm)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
+def _is_too_similar(topic: str, recent_topics: list[str]) -> tuple[bool, str | None]:
+    for published_topic in recent_topics:
+        if _similarity(topic, published_topic) >= 0.42:
+            return True, published_topic
+    return False, None
+
+
+def _sanitize_generated_title(value: object) -> str:
+    title = str(value or "").strip()
+    title = title.strip("\"'«»“”")
+    title = re.sub(r"\s+", " ", title)
+    return title[:120]
+
+
+def _sanitize_keywords(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    keywords = []
+    for item in value:
+        keyword = str(item or "").strip()
+        if keyword:
+            keywords.append(keyword[:40])
+    return tuple(keywords[:5])
+
+
+def _selection_from_candidate(candidate: dict) -> TopicSelection:
+    return TopicSelection(
+        title=_sanitize_generated_title(candidate.get("title")),
+        category=str(candidate.get("category") or "").strip()[:40] or None,
+        angle=str(candidate.get("angle") or "").strip()[:160] or None,
+        keywords=_sanitize_keywords(candidate.get("keywords")),
+    )
+
+
+def _is_acceptable_generated_topic(title: str, recent_topics: list[str]) -> tuple[bool, str]:
+    if not title:
+        return False, "empty title"
+    if len(title) < 20:
+        return False, "too short"
+    if len(title) > 100:
+        return False, "too long"
+    normalized = _normalize_topic(title)
+    if any(fragment in normalized for fragment in _POPULAR_TOPIC_FRAGMENTS):
+        return False, "popular topic fragment"
+    similar, published_topic = _is_too_similar(title, recent_topics)
+    if similar:
+        return False, f"similar to '{published_topic}'"
+    return True, ""
+
+
+async def _pick_generated_topic() -> TopicSelection | None:
+    recent_topics = get_recent_published_topics(RECENT_TOPICS_LIMIT)
+    for attempt in range(1, GENERATED_TOPIC_ATTEMPTS + 1):
+        try:
+            candidate = await generate_topic_candidate(recent_topics, attempt)
+        except Exception as e:
+            logger.warning("Failed to generate topic candidate: %s", e)
+            return None
+
+        selection = _selection_from_candidate(candidate)
+        ok, reason = _is_acceptable_generated_topic(selection.title, recent_topics)
+        if ok:
+            logger.info("Selected generated topic: %s", selection.title)
+            return selection
+
+        logger.info("Rejected generated topic '%s': %s", selection.title, reason)
+        recent_topics = [selection.title, *recent_topics]
+
+    return None
+
+
+async def pick_next_topic() -> TopicSelection:
+    generated_topic = await _pick_generated_topic()
+    if generated_topic:
+        return generated_topic
+
     published = set(get_published_topics())
-    available = [t for t in TOPICS if t not in published]
+    recent_topics = get_recent_published_topics(RECENT_TOPICS_LIMIT)
+    available = [
+        t for t in TOPICS
+        if t not in published and not _is_too_similar(t, recent_topics)[0]
+    ]
     if not available:
-        available = TOPICS
-    return random.choice(available)
+        available = [t for t in TOPICS if t not in published] or TOPICS
+    logger.info("Selected fallback topic from static pool")
+    return TopicSelection(title=random.choice(available))
