@@ -4,6 +4,10 @@ from telegram import Bot, InputFile
 from app.config import TELEGRAM_BOT_TOKEN
 
 logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
+logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 
 _bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
