@@ -2,7 +2,8 @@ import asyncio
 import logging
 import urllib3
 import requests
-import random
+import re
+from dataclasses import dataclass
 from typing import Optional
 from app.config import PEXELS_API_KEY, PIXABAY_API_KEY
 
@@ -45,6 +46,16 @@ _SAFE_QUERIES = {
 }
 
 _BANNED_WORDS = {"weapon", "war", "missile", "military", "gun", "army", "tank"}
+_GENERIC_QUERIES = {"ai", "robot", "technology", "future", "startup"}
+
+
+@dataclass(frozen=True)
+class ImageCandidate:
+    source: str
+    url: str
+    width: int
+    height: int
+    description: str = ""
 
 _TOPIC_QUERY_RULES = [
     (("gps", "навигац", "спутник"), "GPS satellite navigation technology map"),
@@ -126,6 +137,24 @@ _TOPIC_QUERY_RULES = [
 
 def generate_image_query(topic: str) -> str:
     t = topic.lower()
+    normalized = t.replace("ё", "е")
+
+    if any(kw in normalized for kw in ("поддержк", "оператор", "колл-центр", "call")):
+        return "customer support center with AI assistant, futuristic office, human and artificial intelligence collaboration"
+    if any(kw in normalized for kw in ("ии-агент", "ai-агент", "агент", "личн")):
+        return "personal AI assistant working with human, futuristic digital workspace, productivity automation"
+    if any(kw in normalized for kw in ("склад", "логист", "доставк", "посыл")):
+        return "autonomous warehouse robots moving packages, modern logistics center, futuristic automation"
+    if any(kw in normalized for kw in ("стартап", "малый бизнес", "магазин", "продаж", "клиент")):
+        return "small business owner using AI tools, modern startup workspace, digital automation and customer service"
+    if any(kw in normalized for kw in ("робот", "роботы")):
+        return "collaborative robots working with people, modern robotics lab, bright futuristic technology scene"
+    if any(kw in normalized for kw in ("нейросет", "искусственный интеллект", " ии", "ai", "алгоритм")):
+        return "human working with artificial intelligence interface, modern digital workspace, neural network visualization"
+    if any(kw in normalized for kw in ("автоматизац", "офис", "отчет", "письм", "расписан")):
+        return "office worker using automation dashboard, AI productivity tools, modern bright workplace"
+    if any(kw in normalized for kw in ("цифров", "сервис", "платформ", "приложен")):
+        return "people using digital service platform, modern app interface, bright technology workspace"
 
     for keywords, query in _TOPIC_QUERY_RULES:
         if any(kw in t for kw in keywords):
@@ -146,40 +175,102 @@ def generate_image_query(topic: str) -> str:
         word for word in topic.replace("ё", "е").split()
         if word.lower().strip(".,:;!?") not in _BANNED_WORDS
     )
-    return f"{cleaned_topic} science educational illustration"
+    return f"{cleaned_topic} modern science technology cover, people, clear subject, bright editorial photo"
 
 _HEADERS = {"User-Agent": "HochuVseZnatBot/1.0"}
 
 
-def _pick_url(urls: list[str]) -> Optional[str]:
-    if not urls:
-        return None
-    return random.choice(urls)
+def _tokens(text: str) -> set[str]:
+    return {
+        token for token in re.findall(r"[a-z0-9]+", text.lower())
+        if len(token) >= 4 and token not in _GENERIC_QUERIES
+    }
 
 
-def _pexels(query: str) -> Optional[str]:
+def _score_candidate(candidate: ImageCandidate, query: str) -> tuple[int, list[str]]:
+    score = 0
+    reasons = []
+    description = candidate.description.lower()
+    query_tokens = _tokens(query)
+    description_tokens = _tokens(description)
+    overlap = len(query_tokens & description_tokens)
+
+    if candidate.width >= 1200 and candidate.height >= 700:
+        score += 25
+        reasons.append("good resolution")
+    elif candidate.width >= 1000 and candidate.height >= 600:
+        score += 15
+        reasons.append("acceptable resolution")
+    else:
+        score -= 25
+        reasons.append("low resolution")
+
+    ratio = candidate.width / candidate.height if candidate.height else 0
+    if 1.45 <= ratio <= 2.2:
+        score += 20
+        reasons.append("landscape cover format")
+    elif ratio < 1.2:
+        score -= 15
+        reasons.append("not cover-friendly")
+
+    if overlap:
+        score += min(overlap * 8, 32)
+        reasons.append("matches query keywords")
+
+    if any(word in description for word in ("person", "people", "human", "worker", "team", "office")):
+        score += 12
+        reasons.append("people or workplace")
+    if any(word in description for word in ("robot", "automation", "artificial intelligence", "digital", "interface", "technology")):
+        score += 14
+        reasons.append("technology scene")
+    if any(word in description for word in ("dark", "black background", "abstract", "texture", "text", "word", "laptop on desk")):
+        score -= 14
+        reasons.append("generic or text-heavy risk")
+
+    return score, reasons or ["best available candidate"]
+
+
+def _pick_best(candidates: list[ImageCandidate], query: str) -> tuple[ImageCandidate | None, str]:
+    if not candidates:
+        return None, "no candidates"
+    scored = [(_score_candidate(candidate, query), candidate) for candidate in candidates]
+    scored.sort(key=lambda item: item[0][0], reverse=True)
+    (score, reasons), candidate = scored[0]
+    return candidate, f"score={score}; {', '.join(reasons[:4])}"
+
+
+def _pexels(query: str) -> list[ImageCandidate]:
     if not PEXELS_API_KEY:
-        return None
+        return []
     try:
         resp = requests.get(
             "https://api.pexels.com/v1/search",
-            params={"query": query, "per_page": 10, "orientation": "landscape"},
+            params={"query": query, "per_page": 15, "orientation": "landscape"},
             headers={**_HEADERS, "Authorization": PEXELS_API_KEY},
             timeout=30,
             verify=False,
         )
         resp.raise_for_status()
         photos = resp.json().get("photos", [])
-        urls = [item["src"]["large"] for item in photos if item.get("src", {}).get("large")]
-        return _pick_url(urls)
+        return [
+            ImageCandidate(
+                source="Pexels",
+                url=item["src"].get("large2x") or item["src"].get("large"),
+                width=int(item.get("width") or 0),
+                height=int(item.get("height") or 0),
+                description=str(item.get("alt") or ""),
+            )
+            for item in photos
+            if item.get("src", {}).get("large") or item.get("src", {}).get("large2x")
+        ]
     except Exception as e:
         logger.warning("Pexels error: %s", e)
-    return None
+    return []
 
 
-def _pixabay(query: str) -> Optional[str]:
+def _pixabay(query: str) -> list[ImageCandidate]:
     if not PIXABAY_API_KEY:
-        return None
+        return []
     try:
         resp = requests.get(
             "https://pixabay.com/api/",
@@ -199,15 +290,20 @@ def _pixabay(query: str) -> Optional[str]:
         )
         resp.raise_for_status()
         hits = resp.json().get("hits", [])
-        urls = [
-            item.get("largeImageURL") or item.get("webformatURL")
+        return [
+            ImageCandidate(
+                source="Pixabay",
+                url=item.get("largeImageURL") or item.get("webformatURL"),
+                width=int(item.get("imageWidth") or item.get("webformatWidth") or 0),
+                height=int(item.get("imageHeight") or item.get("webformatHeight") or 0),
+                description=str(item.get("tags") or ""),
+            )
             for item in hits
             if item.get("largeImageURL") or item.get("webformatURL")
         ]
-        return _pick_url(urls)
     except Exception as e:
         logger.warning("Pixabay error: %s", e)
-    return None
+    return []
 
 
 def _download(url: str) -> bytes:
@@ -217,15 +313,23 @@ def _download(url: str) -> bytes:
 
 
 async def fetch_image(query: str) -> Optional[bytes]:
-    url = await asyncio.to_thread(_pexels, query)
-    if not url:
-        logger.info("Pexels returned nothing, trying Pixabay")
-        url = await asyncio.to_thread(_pixabay, query)
-    if not url:
+    logger.info("Image search query: %s", query)
+    pexels_candidates, pixabay_candidates = await asyncio.gather(
+        asyncio.to_thread(_pexels, query),
+        asyncio.to_thread(_pixabay, query),
+    )
+    candidate, reason = _pick_best([*pexels_candidates, *pixabay_candidates], query)
+    if not candidate:
         logger.warning("No image found for query: %s", query)
         return None
+    logger.info(
+        "Selected image: source=%s url=%s reason=%s",
+        candidate.source,
+        candidate.url,
+        reason,
+    )
     try:
-        return await asyncio.to_thread(_download, url)
+        return await asyncio.to_thread(_download, candidate.url)
     except Exception as e:
         logger.warning("Image download failed: %s", e)
         return None

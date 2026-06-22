@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 from app.topic_selector import (
     _is_acceptable_generated_topic,
     _is_too_similar,
+    _selection_from_candidate,
     pick_next_topic,
 )
 
@@ -27,6 +28,23 @@ class TopicSelectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, "popular topic fragment")
 
+    def test_rejects_history_without_modern_relevance(self):
+        ok, reason = _is_acceptable_generated_topic(
+            "Как древние мореплаватели ориентировались по звёздам",
+            [],
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(reason, "history topic without modern relevance")
+
+    def test_sanitizes_combined_generated_category(self):
+        selection = _selection_from_candidate({
+            "title": "Как стартапы используют AI для рекламы",
+            "category": "startup|business_ai|ai",
+        })
+
+        self.assertEqual(selection.category, "business_ai")
+
     @patch("app.topic_selector.get_published_topics", return_value=[])
     @patch("app.topic_selector.get_recent_published_topics", return_value=[])
     @patch("app.topic_selector.generate_topic_candidate", new_callable=AsyncMock)
@@ -37,17 +55,21 @@ class TopicSelectorTests(unittest.IsolatedAsyncioTestCase):
         _mock_published,
     ):
         mock_generate_topic_candidate.return_value = {
-            "title": "Почему римский бетон крепнет в морской воде",
-            "category": "history",
-            "angle": "древняя технология материалов",
-            "keywords": ["римский бетон", "морская вода", "вулканический пепел"],
+            "title": "Как ИИ-агенты помогают малому бизнесу отвечать клиентам ночью",
+            "category": "business_ai",
+            "angle": "показывает практический кейс автоматизации без большой команды",
+            "keywords": ["ии-агенты", "малый бизнес", "поддержка клиентов"],
         }
 
         selected_topic = await pick_next_topic()
 
-        self.assertEqual(selected_topic.title, "Почему римский бетон крепнет в морской воде")
-        self.assertEqual(selected_topic.category, "history")
-        self.assertEqual(selected_topic.keywords, ("римский бетон", "морская вода", "вулканический пепел"))
+        self.assertEqual(
+            selected_topic.title,
+            "Как ИИ-агенты помогают малому бизнесу отвечать клиентам ночью",
+        )
+        self.assertEqual(selected_topic.category, "business_ai")
+        self.assertEqual(selected_topic.keywords, ("ии-агенты", "малый бизнес", "поддержка клиентов"))
+        _mock_recent.assert_called_with(80, days=30)
 
 
 if __name__ == "__main__":

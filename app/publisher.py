@@ -29,7 +29,9 @@ async def publish_next_post() -> None:
         return
 
     try:
-        image_bytes = await fetch_image(generate_image_query(topic))
+        image_query = generate_image_query(topic)
+        logger.info("Image query for '%s': %s", topic, image_query)
+        image_bytes = await fetch_image(image_query)
     except Exception as e:
         logger.warning("Failed to fetch image for '%s': %s", topic, e)
         image_bytes = None

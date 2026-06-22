@@ -96,17 +96,29 @@ def get_published_topics() -> list[str]:
     return [row[0] for row in rows]
 
 
-def get_recent_published_topics(limit: int = 50) -> list[str]:
+def get_recent_published_topics(limit: int = 50, days: int | None = None) -> list[str]:
     with _connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT topic
-            FROM published_topics
-            ORDER BY published_at DESC, id DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        if days:
+            rows = conn.execute(
+                """
+                SELECT topic
+                FROM published_topics
+                WHERE published_at >= datetime('now', ?)
+                ORDER BY published_at DESC, id DESC
+                LIMIT ?
+                """,
+                (f"-{days} days", limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT topic
+                FROM published_topics
+                ORDER BY published_at DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
     return [row[0] for row in rows]
 
 
