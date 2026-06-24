@@ -9,14 +9,25 @@ class ImageQueryTests(unittest.TestCase):
         query = generate_image_query("Как ИИ заменяет операторов поддержки")
 
         self.assertIn("customer support center", query)
-        self.assertIn("AI assistant", query)
+        self.assertIn("AI chatbot", query)
         self.assertNotEqual(query.lower(), "ai robot")
 
     def test_ai_agent_topic_gets_specific_english_query(self):
         query = generate_image_query("Почему ИИ-агенты станут личными сотрудниками каждого человека")
 
         self.assertIn("personal AI assistant", query)
-        self.assertIn("productivity automation", query)
+        self.assertIn("productivity dashboard", query)
+
+    def test_ai_burnout_topic_uses_workload_context(self):
+        query = generate_image_query(
+            "Как компании используют ИИ для борьбы с выгоранием сотрудников",
+            category="business_ai",
+            keywords=("выгорание", "нагрузка", "сотрудники"),
+        )
+
+        self.assertIn("employee wellbeing", query)
+        self.assertIn("workload analytics", query)
+        self.assertNotIn("neural network visualization", query)
 
     def test_specific_topic_query_for_dna(self):
         self.assertEqual(
@@ -43,9 +54,35 @@ class ImageQueryTests(unittest.TestCase):
         self.assertEqual(selected, strong)
         self.assertIn("landscape cover format", reason)
 
+    def test_pick_best_skips_recently_used_url(self):
+        used = ImageCandidate(
+            "Pexels",
+            "https://example.com/used.jpg",
+            1800,
+            1000,
+            "people using artificial intelligence interface in modern office",
+        )
+        fresh = ImageCandidate(
+            "Pixabay",
+            "https://example.com/fresh.jpg",
+            1600,
+            900,
+            "team looking at automation dashboard",
+        )
+
+        selected, reason = _pick_best(
+            [used, fresh],
+            "artificial intelligence office people",
+            used_urls=[used.url],
+        )
+
+        self.assertEqual(selected, fresh)
+        self.assertIn("score=", reason)
+
     @patch("app.images.PIXABAY_API_KEY", "test-key")
     @patch("app.images.requests.get")
     def test_pixabay_returns_image_candidates(self, mock_get):
+        mock_get.return_value.headers = {"Content-Type": "application/json"}
         mock_get.return_value.json.return_value = {
             "hits": [
                 {

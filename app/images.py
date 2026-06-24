@@ -4,7 +4,7 @@ import urllib3
 import requests
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Iterable, Optional
 from app.config import PEXELS_API_KEY, PIXABAY_API_KEY
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -56,6 +56,14 @@ class ImageCandidate:
     width: int
     height: int
     description: str = ""
+
+
+@dataclass(frozen=True)
+class ImageResult:
+    bytes: bytes
+    source: str
+    url: str
+    query: str
 
 _TOPIC_QUERY_RULES = [
     (("gps", "навигац", "спутник"), "GPS satellite navigation technology map"),
@@ -135,26 +143,48 @@ _TOPIC_QUERY_RULES = [
 ]
 
 
-def generate_image_query(topic: str) -> str:
-    t = topic.lower()
-    normalized = t.replace("ё", "е")
+def _contains_any(text: str, keywords: Iterable[str]) -> bool:
+    return any(keyword in text for keyword in keywords)
 
-    if any(kw in normalized for kw in ("поддержк", "оператор", "колл-центр", "call")):
-        return "customer support center with AI assistant, futuristic office, human and artificial intelligence collaboration"
-    if any(kw in normalized for kw in ("ии-агент", "ai-агент", "агент", "личн")):
-        return "personal AI assistant working with human, futuristic digital workspace, productivity automation"
-    if any(kw in normalized for kw in ("склад", "логист", "доставк", "посыл")):
-        return "autonomous warehouse robots moving packages, modern logistics center, futuristic automation"
-    if any(kw in normalized for kw in ("стартап", "малый бизнес", "магазин", "продаж", "клиент")):
-        return "small business owner using AI tools, modern startup workspace, digital automation and customer service"
-    if any(kw in normalized for kw in ("робот", "роботы")):
-        return "collaborative robots working with people, modern robotics lab, bright futuristic technology scene"
-    if any(kw in normalized for kw in ("нейросет", "искусственный интеллект", " ии", "ai", "алгоритм")):
-        return "human working with artificial intelligence interface, modern digital workspace, neural network visualization"
-    if any(kw in normalized for kw in ("автоматизац", "офис", "отчет", "письм", "расписан")):
-        return "office worker using automation dashboard, AI productivity tools, modern bright workplace"
-    if any(kw in normalized for kw in ("цифров", "сервис", "платформ", "приложен")):
-        return "people using digital service platform, modern app interface, bright technology workspace"
+
+def _context_text(topic: str, category: str | None, angle: str | None, keywords: Iterable[str] | None) -> str:
+    parts = [topic, category or "", angle or "", " ".join(keywords or ())]
+    return " ".join(parts).lower().replace("ё", "е")
+
+
+def generate_image_query(
+    topic: str,
+    category: str | None = None,
+    angle: str | None = None,
+    keywords: Iterable[str] | None = None,
+) -> str:
+    t = topic.lower()
+    normalized = _context_text(topic, category, angle, keywords)
+
+    if _contains_any(normalized, ("выгоран", "стресс", "нагруз", "wellbeing")):
+        return "employee wellbeing workload analytics AI office team"
+    if _contains_any(normalized, ("фермер", "урож", "поле", "agriculture")):
+        return "smart farming AI agriculture drone crop analytics"
+    if _contains_any(normalized, ("фейк", "дезинформац", "новост", "fake")):
+        return "fact checking newsroom misinformation digital media AI"
+    if _contains_any(normalized, ("тренд", "общественное мнение", "социальн")):
+        return "social media trend analytics dashboard AI marketing team"
+    if _contains_any(normalized, ("поддержк", "оператор", "колл-центр", "call", "чат", "клиент")):
+        return "customer support center AI chatbot operator dashboard"
+    if _contains_any(normalized, ("ии-агент", "ai-агент", "агент", "личн")):
+        return "personal AI assistant productivity dashboard human worker"
+    if _contains_any(normalized, ("склад", "логист", "доставк", "посыл")):
+        return "warehouse robots packages logistics automation"
+    if _contains_any(normalized, ("стартап", "малый бизнес", "магазин", "продаж")):
+        return "small business owner laptop AI tools shop customer service"
+    if _contains_any(normalized, ("робот", "роботы")):
+        return "collaborative robot modern robotics lab people"
+    if _contains_any(normalized, ("автоматизац", "офис", "отчет", "письм", "расписан")):
+        return "office worker automation dashboard productivity software"
+    if _contains_any(normalized, ("цифров", "сервис", "платформ", "приложен")):
+        return "digital service platform app interface people"
+    if _contains_any(normalized, ("нейросет", "искусственный интеллект", " ии", "ai", "алгоритм")):
+        return "artificial intelligence data analytics dashboard human team"
 
     for keywords, query in _TOPIC_QUERY_RULES:
         if any(kw in t for kw in keywords):
@@ -178,6 +208,7 @@ def generate_image_query(topic: str) -> str:
     return f"{cleaned_topic} modern science technology cover, people, clear subject, bright editorial photo"
 
 _HEADERS = {"User-Agent": "HochuVseZnatBot/1.0"}
+_MAX_PIXABAY_QUERY_CHARS = 95
 
 
 def _tokens(text: str) -> set[str]:
@@ -226,17 +257,62 @@ def _score_candidate(candidate: ImageCandidate, query: str) -> tuple[int, list[s
     if any(word in description for word in ("dark", "black background", "abstract", "texture", "text", "word", "laptop on desk")):
         score -= 14
         reasons.append("generic or text-heavy risk")
+    if description and not overlap:
+        score -= 10
+        reasons.append("weak metadata match")
 
     return score, reasons or ["best available candidate"]
 
 
-def _pick_best(candidates: list[ImageCandidate], query: str) -> tuple[ImageCandidate | None, str]:
-    if not candidates:
+def _pick_best(
+    candidates: list[ImageCandidate],
+    query: str,
+    used_urls: Iterable[str] | None = None,
+) -> tuple[ImageCandidate | None, str]:
+    used = set(used_urls or ())
+    fresh_candidates = [candidate for candidate in candidates if candidate.url not in used]
+    if not fresh_candidates and candidates:
+        return None, "all candidates were recently used"
+    if not fresh_candidates:
         return None, "no candidates"
-    scored = [(_score_candidate(candidate, query), candidate) for candidate in candidates]
+    scored = [(_score_candidate(candidate, query), candidate) for candidate in fresh_candidates]
     scored.sort(key=lambda item: item[0][0], reverse=True)
     (score, reasons), candidate = scored[0]
     return candidate, f"score={score}; {', '.join(reasons[:4])}"
+
+
+def _ensure_json_response(resp: requests.Response, source: str) -> None:
+    content_type_header = resp.headers.get("Content-Type", "")
+    content_type = content_type_header.lower() if isinstance(content_type_header, str) else ""
+    if "json" not in content_type:
+        raise ValueError(f"{source} returned non-JSON response: {content_type or 'unknown content type'}")
+
+
+def _compact_search_query(query: str, max_chars: int = _MAX_PIXABAY_QUERY_CHARS) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9 ]+", " ", query)
+    words = []
+    for word in cleaned.split():
+        if len(word) < 3:
+            continue
+        lowered = word.lower()
+        if lowered in {"with", "using", "modern", "bright", "scene", "clear", "cover"}:
+            continue
+        candidate = " ".join([*words, word])
+        if len(candidate) > max_chars:
+            break
+        words.append(word)
+    return " ".join(words) or query[:max_chars]
+
+
+def _query_variants(query: str) -> list[str]:
+    compact = _compact_search_query(query)
+    variants = [compact]
+    broad = " ".join(compact.split()[:4])
+    if broad and broad != compact:
+        variants.append(broad)
+    if "AI" in query or "artificial intelligence" in query.lower():
+        variants.append("artificial intelligence office team")
+    return list(dict.fromkeys(variants))
 
 
 def _pexels(query: str) -> list[ImageCandidate]:
@@ -251,6 +327,7 @@ def _pexels(query: str) -> list[ImageCandidate]:
             verify=False,
         )
         resp.raise_for_status()
+        _ensure_json_response(resp, "Pexels")
         photos = resp.json().get("photos", [])
         return [
             ImageCandidate(
@@ -276,7 +353,7 @@ def _pixabay(query: str) -> list[ImageCandidate]:
             "https://pixabay.com/api/",
             params={
                 "key": PIXABAY_API_KEY,
-                "q": query,
+                "q": _compact_search_query(query),
                 "image_type": "photo",
                 "orientation": "horizontal",
                 "safesearch": "true",
@@ -289,6 +366,7 @@ def _pixabay(query: str) -> list[ImageCandidate]:
             verify=False,
         )
         resp.raise_for_status()
+        _ensure_json_response(resp, "Pixabay")
         hits = resp.json().get("hits", [])
         return [
             ImageCandidate(
@@ -309,27 +387,49 @@ def _pixabay(query: str) -> list[ImageCandidate]:
 def _download(url: str) -> bytes:
     resp = requests.get(url, headers=_HEADERS, timeout=30, verify=False)
     resp.raise_for_status()
+    content_type = resp.headers.get("Content-Type", "").lower()
+    if "image" not in content_type:
+        raise ValueError(f"Downloaded file is not an image: {content_type or 'unknown content type'}")
+    if len(resp.content) < 20_000:
+        raise ValueError("Downloaded image is unexpectedly small")
     return resp.content
 
 
-async def fetch_image(query: str) -> Optional[bytes]:
+async def fetch_image_result(query: str, used_urls: Iterable[str] | None = None) -> Optional[ImageResult]:
     logger.info("Image search query: %s", query)
-    pexels_candidates, pixabay_candidates = await asyncio.gather(
-        asyncio.to_thread(_pexels, query),
-        asyncio.to_thread(_pixabay, query),
-    )
-    candidate, reason = _pick_best([*pexels_candidates, *pixabay_candidates], query)
-    if not candidate:
-        logger.warning("No image found for query: %s", query)
-        return None
-    logger.info(
-        "Selected image: source=%s url=%s reason=%s",
-        candidate.source,
-        candidate.url,
-        reason,
-    )
-    try:
-        return await asyncio.to_thread(_download, candidate.url)
-    except Exception as e:
-        logger.warning("Image download failed: %s", e)
-        return None
+    last_reason = "no candidates"
+    for search_query in _query_variants(query):
+        pexels_candidates, pixabay_candidates = await asyncio.gather(
+            asyncio.to_thread(_pexels, search_query),
+            asyncio.to_thread(_pixabay, search_query),
+        )
+        candidate, reason = _pick_best([*pexels_candidates, *pixabay_candidates], search_query, used_urls)
+        last_reason = reason
+        if not candidate:
+            logger.warning("No image found for query variant '%s': %s", search_query, reason)
+            continue
+        logger.info(
+            "Selected image: source=%s url=%s query=%s reason=%s",
+            candidate.source,
+            candidate.url,
+            search_query,
+            reason,
+        )
+        try:
+            image_bytes = await asyncio.to_thread(_download, candidate.url)
+            return ImageResult(
+                bytes=image_bytes,
+                source=candidate.source,
+                url=candidate.url,
+                query=search_query,
+            )
+        except Exception as e:
+            logger.warning("Image download failed: %s", e)
+
+    logger.warning("No image found for query: %s (%s)", query, last_reason)
+    return None
+
+
+async def fetch_image(query: str) -> Optional[bytes]:
+    result = await fetch_image_result(query)
+    return result.bytes if result else None

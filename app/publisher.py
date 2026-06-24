@@ -1,11 +1,13 @@
 import logging
 from app.bot import send_text, send_photo_with_caption
 from app.generator import generate_post
-from app.images import fetch_image, generate_image_query
+from app.images import fetch_image_result, generate_image_query
 from app.topic_selector import pick_next_topic
 from app.db import (
+    get_recent_image_urls,
     save_dzen_publication_status,
     save_max_publication_status,
+    save_published_image,
     save_published_topic,
     save_vk_publication_status,
 )
@@ -29,11 +31,18 @@ async def publish_next_post() -> None:
         return
 
     try:
-        image_query = generate_image_query(topic)
+        image_query = generate_image_query(
+            topic,
+            category=selected_topic.category,
+            angle=selected_topic.angle,
+            keywords=selected_topic.keywords,
+        )
         logger.info("Image query for '%s': %s", topic, image_query)
-        image_bytes = await fetch_image(image_query)
+        image_result = await fetch_image_result(image_query, used_urls=get_recent_image_urls())
+        image_bytes = image_result.bytes if image_result else None
     except Exception as e:
         logger.warning("Failed to fetch image for '%s': %s", topic, e)
+        image_result = None
         image_bytes = None
 
     try:
@@ -44,14 +53,6 @@ async def publish_next_post() -> None:
     except Exception as e:
         logger.error("Failed to send post to Telegram: %s", e)
         return
-
-    save_published_topic(
-        topic,
-        category=selected_topic.category,
-        angle=selected_topic.angle,
-        keywords=selected_topic.keywords,
-    )
-    logger.info("Published topic: %s", topic)
 
     try:
         max_message_id = await publish_to_max(text=text, image_bytes=image_bytes)
@@ -79,3 +80,19 @@ async def publish_next_post() -> None:
     else:
         save_dzen_publication_status(topic, dzen_status)
         logger.info("Dzen publication status for '%s': %s", topic, dzen_status)
+
+    if image_result:
+        save_published_image(
+            topic,
+            query=image_result.query,
+            source=image_result.source,
+            url=image_result.url,
+        )
+
+    save_published_topic(
+        topic,
+        category=selected_topic.category,
+        angle=selected_topic.angle,
+        keywords=selected_topic.keywords,
+    )
+    logger.info("Published topic: %s", topic)

@@ -64,6 +64,16 @@ def init_db() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS image_publications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                topic TEXT NOT NULL,
+                query TEXT NOT NULL,
+                source TEXT NOT NULL,
+                url TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
 
 
@@ -157,3 +167,29 @@ def save_vk_publication_status(
             (topic, status, post_id, error),
         )
         conn.commit()
+
+
+def save_published_image(topic: str, query: str, source: str, url: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO image_publications (topic, query, source, url)
+            VALUES (?, ?, ?, ?)
+            """,
+            (topic, query, source, url),
+        )
+        conn.commit()
+
+
+def get_recent_image_urls(limit: int = 50) -> list[str]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT url
+            FROM image_publications
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [row[0] for row in rows]

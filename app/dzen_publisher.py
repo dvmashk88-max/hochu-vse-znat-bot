@@ -275,24 +275,54 @@ async def _wait_for_dzen_studio(page) -> None:
     except Exception:
         await page.wait_for_timeout(1500)
 
-    studio_markers = [
-        page.get_by_text("Студия", exact=False),
-        page.get_by_text("Публикации", exact=False),
-        page.get_by_text("Статистика", exact=False),
-        page.locator('[href*="studio"], [data-testid*="studio" i]'),
-        page.locator('button[aria-label*="созд" i], [role="button"][aria-label*="созд" i]'),
+    async def has_studio_marker(timeout: int = 2500) -> bool:
+        studio_markers = [
+            page.locator('[data-testid="add-publication-button"]'),
+            page.locator('button[data-testid="add-publication-button"]'),
+            page.locator('[data-testid="nav-statistics"], [data-testid="nav-money"], [data-testid="nav-settings"]'),
+            page.get_by_text("Публикации", exact=False),
+            page.get_by_text("Статистика", exact=False),
+            page.locator('[href*="studio"], [data-testid*="studio" i]'),
+            page.locator('button[aria-label*="созд" i], [role="button"][aria-label*="созд" i]'),
+        ]
+        for loc in studio_markers:
+            try:
+                if await loc.first.is_visible(timeout=timeout):
+                    logger.info("Dzen studio marker found")
+                    return True
+            except Exception:
+                continue
+        return False
+
+    if await has_studio_marker():
+        return
+
+    go_to_studio_locators = [
+        page.get_by_role("button", name="Перейти в студию", exact=False),
+        page.get_by_label("Перейти в студию", exact=False),
+        page.locator('button[aria-label*="студи" i]'),
+        page.locator('[role="button"][aria-label*="студи" i]'),
+        page.locator('button:has-text("Перейти в студию")'),
+        page.locator('[href*="studio"]'),
     ]
-    for loc in studio_markers:
+    for idx, loc in enumerate(go_to_studio_locators, start=1):
         try:
-            if await loc.first.is_visible(timeout=2500):
-                logger.info("Dzen studio marker found")
-                return
+            el = loc.first if hasattr(loc, "first") else loc
+            if await el.is_visible(timeout=1000):
+                await el.click(timeout=2500, force=True)
+                logger.info("Clicked Dzen studio fallback locator #%s", idx)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=15000)
+                except Exception:
+                    await page.wait_for_timeout(1500)
+                if await has_studio_marker(timeout=4000):
+                    return
         except Exception:
             continue
 
-    logger.warning("Не удалось подтвердить переход в студию Дзена")
     await _save_debug_screenshot(page, "dzen_studio_not_confirmed")
     await _log_visible_controls(page, "studio not confirmed")
+    raise RuntimeError("Не удалось перейти в студию Дзена")
 
 
 async def _wait_for_article_editor(page) -> None:
