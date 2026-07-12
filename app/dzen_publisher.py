@@ -5,6 +5,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from app.config import (
     DZEN_AUTO_PUBLISH,
@@ -726,6 +727,74 @@ async def _open_dzen_channel(page) -> None:
     raise RuntimeError(f"Не удалось открыть канал Дзена после {DZEN_OPEN_RETRIES} попыток: {last_error}") from last_error
 
 
+def _dzen_channel_slug() -> str | None:
+    path = urlparse(DZEN_CHANNEL_URL).path.strip("/")
+    return path.split("/", 1)[0] if path else None
+
+
+async def _ensure_dzen_authorized(page) -> None:
+    try:
+        if await page.locator('[data-testid="login-button"]').first.is_visible(timeout=1200):
+            await _save_debug_screenshot(page, "dzen_session_not_authorized")
+            await _log_visible_controls(page, "session not authorized")
+            raise RuntimeError("Сессия Дзена не авторизована: обновите DZEN_STORAGE_STATE_JSON")
+    except RuntimeError:
+        raise
+    except Exception:
+        pass
+
+
+async def _open_dzen_studio_direct(page) -> bool:
+    slug = _dzen_channel_slug()
+    if not slug:
+        return False
+
+    studio_url = f"https://dzen.ru/profile/editor/{slug}"
+    try:
+        _log_step(f"Открываю студию напрямую: {studio_url}")
+        await page.goto(studio_url, wait_until="domcontentloaded", timeout=45000)
+        await _wait_for_dzen_studio(page)
+        return True
+    except Exception as e:
+        logger.warning("Не удалось открыть студию Дзена напрямую: %s", e)
+        await _open_dzen_channel(page)
+        return False
+
+
+async def _open_dzen_studio_via_avatar(page) -> None:
+    _log_step("Нажимаю аватар")
+    await _click_first_visible([
+        page.locator('[data-testid="user-avatar"]'),
+        page.locator('[data-testid="profile-menu-wrapper"]'),
+        page.locator('[aria-label="Меню профиля"]'),
+        page.locator('[data-testid*="avatar"]'),
+        page.locator('header [class*="Avatar"]'),
+        page.locator('header [class*="avatar"]'),
+        page.locator('header img[class*="avatar"]'),
+        page.locator('[class*="UserMenu"] img'),
+        page.locator('[class*="userMenu"] img'),
+        page.locator('[class*="HeaderUser"]'),
+        page.locator('[class*="header-user"]'),
+        page.locator('header button').last,
+    ], "аватар пользователя")
+
+    await page.wait_for_timeout(800)
+
+    _log_step("Нажимаю Студия")
+    await _click_first_visible([
+        page.get_by_role("button", name="Перейти в студию", exact=False),
+        page.get_by_label("Перейти в студию", exact=False),
+        page.get_by_text("Перейти в студию", exact=False),
+        page.get_by_text("Студия", exact=True),
+        page.get_by_text("Студия", exact=False),
+        page.locator('[aria-label*="студи" i]'),
+        page.locator('[title*="студи" i]'),
+        page.locator('[href*="studio"]'),
+        page.locator('a:has-text("Студия")'),
+        page.locator('button:has-text("Студия")'),
+    ], "«Студия»")
+
+
 async def _insert_header_image(page, body_el, image_bytes: bytes | None) -> bool:
     if not image_bytes:
         logger.info("Картинка для Дзена не передана, публикуем только текст")
@@ -990,36 +1059,10 @@ async def publish_draft(
 
             _log_step(f"Открываю канал: {DZEN_CHANNEL_URL}")
             await _open_dzen_channel(page)
+            await _ensure_dzen_authorized(page)
 
-            _log_step("Нажимаю аватар")
-            await _click_first_visible([
-                page.locator('[data-testid="user-avatar"]'),
-                page.locator('[data-testid*="avatar"]'),
-                page.locator('header [class*="Avatar"]'),
-                page.locator('header [class*="avatar"]'),
-                page.locator('header img[class*="avatar"]'),
-                page.locator('[class*="UserMenu"] img'),
-                page.locator('[class*="userMenu"] img'),
-                page.locator('[class*="HeaderUser"]'),
-                page.locator('[class*="header-user"]'),
-                page.locator('header button').last,
-            ], "аватар пользователя")
-
-            await page.wait_for_timeout(800)
-
-            _log_step("Нажимаю Студия")
-            await _click_first_visible([
-                page.get_by_role("button", name="Перейти в студию", exact=False),
-                page.get_by_label("Перейти в студию", exact=False),
-                page.get_by_text("Перейти в студию", exact=False),
-                page.get_by_text("Студия", exact=True),
-                page.get_by_text("Студия", exact=False),
-                page.locator('[aria-label*="студи" i]'),
-                page.locator('[title*="студи" i]'),
-                page.locator('[href*="studio"]'),
-                page.locator('a:has-text("Студия")'),
-                page.locator('button:has-text("Студия")'),
-            ], "«Студия»")
+            if not await _open_dzen_studio_direct(page):
+                await _open_dzen_studio_via_avatar(page)
 
             _log_step("Жду студию")
             await _wait_for_dzen_studio(page)
