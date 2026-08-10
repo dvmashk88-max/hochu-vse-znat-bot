@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 1280px; height: 720px; overflow: hidden; }
+    body {
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      color: #fff;
+      background: #050719;
+    }
+    .cover { position: relative; width: 1280px; height: 720px; overflow: hidden; }
+    .background { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    .shade {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, rgba(3,5,19,.98) 0%, rgba(3,5,19,.91) 31%, rgba(3,5,19,.25) 57%, rgba(3,5,19,.03) 100%);
+    }
+    .copy { position: absolute; left: 58px; top: 72px; width: 560px; }
+    .brand {
+      margin: 0;
+      font-size: 66px;
+      line-height: 1;
+      font-weight: 900;
+      letter-spacing: -3px;
+      background: linear-gradient(100deg, #ad6cff 0%, #6578ff 48%, #13d5e9 100%);
+      -webkit-background-clip: text;
+      color: transparent;
+      text-shadow: 0 0 44px rgba(124, 58, 237, .18);
+    }
+    .descriptor {
+      margin: 22px 0 17px;
+      font-size: 20px;
+      font-weight: 650;
+      color: rgba(255,255,255,.78);
+    }
+    .products {
+      display: grid;
+      grid-template-columns: 190px 225px;
+      gap: 9px 11px;
+    }
+    .product {
+      height: 40px;
+      display: flex;
+      align-items: center;
+      padding: 0 15px;
+      border: 1px solid rgba(105,211,255,.38);
+      border-radius: 12px;
+      background: linear-gradient(105deg,rgba(92,49,190,.28),rgba(8,115,162,.18));
+      box-shadow: inset 0 0 18px rgba(80,65,210,.12), 0 0 18px rgba(37,99,235,.08);
+      font-size: 16px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .product:nth-child(even) { border-color: rgba(172,102,255,.45); }
+    .accent {
+      width: 96px;
+      height: 5px;
+      margin-top: 20px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #7c3aed, #06b6d4);
+      box-shadow: 0 0 25px rgba(6,182,212,.55);
+    }
+    .footer {
+      position: absolute;
+      left: 58px;
+      bottom: 34px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+    .qr-panel {
+      width: 148px;
+      height: 148px;
+      padding: 10px;
+      border-radius: 16px;
+      background: #fff;
+      box-shadow: 0 0 0 2px rgba(139,92,246,.75), 0 0 38px rgba(6,182,212,.28);
+    }
+    .qr-panel img { display: block; width: 100%; height: 100%; }
+    .url {
+      font-size: 26px;
+      line-height: 1;
+      font-weight: 750;
+      letter-spacing: -.4px;
+      color: #fff;
+      text-shadow: 0 2px 18px rgba(0,0,0,.9);
+    }
+  </style>
+</head>
+<body>
+  <main class="cover">
+    <img class="background" src="marketcode_cover_base.png" alt="">
+    <div class="shade"></div>
+    <section class="copy">
+      <h1 class="brand">MarketCode Pro</h1>
+      <p class="descriptor">Цифровой магазин</p>
+      <div class="products">
+        <div class="product">Apple ID</div>
+        <div class="product">Apple Gift Card</div>
+        <div class="product">Steam</div>
+        <div class="product">Telegram Stars</div>
+        <div class="product">Telegram Premium</div>
+        <div class="product">PUBG UC</div>
+        <div class="product">Free Fire Diamonds</div>
+      </div>
+      <div class="accent"></div>
+    </section>
+    <footer class="footer">
+      <div class="qr-panel"><img src="marketcode_qr.png" alt="QR-код MarketCode Pro"></div>
+      <div class="url">https://www.marketcode.pro</div>
+    </footer>
+  </main>
+</body>
+</html>
