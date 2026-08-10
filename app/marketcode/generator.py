@@ -35,6 +35,11 @@ _RISKY_GUIDANCE = (
     "рассмотрите возможность использования легальных сервисов",
     "могли бы предоставить свои данные",
 )
+_SAFE_RISK_NEGATIONS = (
+    "не используйте vpn",
+    "не использовать vpn",
+    "не применяйте vpn",
+)
 _FORBIDDEN_PAYMENT_GUIDANCE = (
     "киви",
     "qiwi",
@@ -100,6 +105,13 @@ _CTA_BY_CATEGORY = {
 
 def _word_count(text: str) -> int:
     return len(re.findall(r"[A-Za-zА-Яа-яЁё0-9]+(?:[-–][A-Za-zА-Яа-яЁё0-9]+)*", text))
+
+
+def _risky_guidance(text: str) -> str | None:
+    normalized = text.lower()
+    for safe_phrase in _SAFE_RISK_NEGATIONS:
+        normalized = normalized.replace(safe_phrase, "")
+    return next((phrase for phrase in _RISKY_GUIDANCE if phrase in normalized), None)
 
 
 def _cta(category: str) -> str:
@@ -235,7 +247,7 @@ def _generate_sync(entry: ContentPlanEntry, settings: MarketCodeSettings) -> Gen
         )
     if _BANNED_CTA in body.lower():
         raise ValueError("MarketCode article contains the forbidden generic CTA")
-    risky_phrase = next((phrase for phrase in _RISKY_GUIDANCE if phrase in body.lower()), None)
+    risky_phrase = _risky_guidance(body)
     if risky_phrase:
         raise ValueError(f"MarketCode article contains risky guidance: {risky_phrase}")
     forbidden_payment = next(

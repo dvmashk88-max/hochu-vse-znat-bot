@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.marketcode.config import MarketCodeSettings, parse_post_time
 from app.marketcode.content_plan import ContentPlanEntry, load_content_plan
-from app.marketcode.generator import _cta, _generate_sync, _normalize_body
+from app.marketcode.generator import _cta, _generate_sync, _normalize_body, _risky_guidance
 from app.marketcode.generator import GeneratedArticle
 from app.marketcode import publisher as marketcode_publisher
 from app.marketcode import repository
@@ -95,6 +95,10 @@ class MarketCodeGeneratorTests(unittest.TestCase):
         body = _normalize_body(f"{self.entry.topic}\n\nВступление", self.entry.topic)
 
         self.assertEqual(body, "Вступление")
+
+    def test_risky_guidance_allows_explicit_vpn_warning(self):
+        self.assertIsNone(_risky_guidance("Не используйте VPN для смены региона."))
+        self.assertEqual(_risky_guidance("Используйте VPN для смены региона."), "используйте vpn")
 
     @patch("app.marketcode.generator._call_api")
     def test_generation_rejects_forbidden_payment_guidance(self, mock_call):
