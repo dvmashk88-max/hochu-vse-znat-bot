@@ -11,8 +11,8 @@ from app.marketcode.content_plan import load_content_plan
 from app.marketcode.generator import generate_article
 from app.marketcode.image import fetch_brand_cover
 from app.marketcode.repository import published_days, save_publication
+from app.marketcode.vk import prepare_marketcode_vk_image, publish_marketcode_to_vk
 from app.max_publisher import publish_to_max
-from app.vk_publisher import publish_to_vk
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,12 @@ async def publish_marketcode_article() -> None:
         logger.error("MarketCode publication cancelled: the required brand cover is unavailable")
         return
 
+    try:
+        vk_image = await prepare_marketcode_vk_image(image_bytes)
+    except Exception as exc:
+        logger.error("MarketCode publication cancelled: VK cannot upload the required cover: %s", exc)
+        return
+
     statuses: dict[str, str] = {}
 
     async def telegram_operation():
@@ -69,7 +75,7 @@ async def publish_marketcode_article() -> None:
     )
     await _attempt(
         "vk",
-        lambda: publish_to_vk(text=article.full_text, image_bytes=image_bytes),
+        lambda: publish_marketcode_to_vk(text=article.full_text, prepared=vk_image),
         statuses,
     )
     await _attempt(

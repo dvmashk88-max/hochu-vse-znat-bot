@@ -160,6 +160,49 @@ class MarketCodeRepositoryTests(unittest.TestCase):
 
 
 class MarketCodePublisherTests(unittest.IsolatedAsyncioTestCase):
+    async def test_vk_cover_preflight_cancels_all_channels(self):
+        settings = MarketCodeSettings(
+            enabled=True,
+            post_time="12:00",
+            timezone="Europe/Moscow",
+            image_url="assets/marketcode/marketcode_cover.png",
+            content_plan="MARKETCODE_CONTENT_PLAN.md",
+            model="test/model",
+            fallback_model="test/fallback",
+        )
+        entry = load_content_plan()[0]
+        article = GeneratedArticle(entry.topic, "Полезный текст", 300, "test/model")
+
+        with (
+            patch.object(marketcode_publisher, "load_settings", return_value=settings),
+            patch.object(marketcode_publisher, "_next_entry", return_value=entry),
+            patch.object(
+                marketcode_publisher,
+                "generate_article",
+                new=AsyncMock(return_value=article),
+            ),
+            patch.object(
+                marketcode_publisher,
+                "fetch_brand_cover",
+                new=AsyncMock(return_value=b"image-bytes"),
+            ),
+            patch.object(
+                marketcode_publisher,
+                "prepare_marketcode_vk_image",
+                new=AsyncMock(side_effect=RuntimeError("VK image rejected")),
+            ),
+            patch.object(marketcode_publisher, "send_photo_with_caption", new=AsyncMock()) as telegram,
+            patch.object(marketcode_publisher, "publish_to_max", new=AsyncMock()) as publish_max,
+            patch.object(marketcode_publisher, "publish_draft", new=AsyncMock()) as publish_dzen,
+            patch.object(marketcode_publisher, "save_publication") as save_publication,
+        ):
+            await marketcode_publisher.publish_marketcode_article()
+
+        telegram.assert_not_awaited()
+        publish_max.assert_not_awaited()
+        publish_dzen.assert_not_awaited()
+        save_publication.assert_not_called()
+
     async def test_article_is_not_split_for_any_channel(self):
         entry = ContentPlanEntry(
             day=1,
@@ -210,7 +253,12 @@ class MarketCodePublisherTests(unittest.IsolatedAsyncioTestCase):
             ) as publish_max,
             patch.object(
                 marketcode_publisher,
-                "publish_to_vk",
+                "prepare_marketcode_vk_image",
+                new=AsyncMock(return_value="prepared-vk-image"),
+            ) as prepare_vk,
+            patch.object(
+                marketcode_publisher,
+                "publish_marketcode_to_vk",
                 new=AsyncMock(return_value="vk-id"),
             ) as publish_vk,
             patch.object(
@@ -232,7 +280,11 @@ class MarketCodePublisherTests(unittest.IsolatedAsyncioTestCase):
             article.full_text,
         )
         publish_max.assert_awaited_once_with(text=article.full_text, image_bytes=b"image-bytes")
-        publish_vk.assert_awaited_once_with(text=article.full_text, image_bytes=b"image-bytes")
+        prepare_vk.assert_awaited_once_with(b"image-bytes")
+        publish_vk.assert_awaited_once_with(
+            text=article.full_text,
+            prepared="prepared-vk-image",
+        )
         publish_dzen.assert_awaited_once_with(
             title=article.title,
             text=article.body,
