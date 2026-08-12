@@ -10,6 +10,7 @@ from app.marketcode.generator import _cta, _generate_sync, _normalize_body, _ris
 from app.marketcode.generator import GeneratedArticle
 from app.marketcode import publisher as marketcode_publisher
 from app.marketcode import repository
+from app.marketcode import vk as marketcode_vk
 from app.marketcode.image import _download_image
 
 
@@ -160,7 +161,7 @@ class MarketCodeRepositoryTests(unittest.TestCase):
 
 
 class MarketCodePublisherTests(unittest.IsolatedAsyncioTestCase):
-    async def test_vk_cover_preflight_cancels_all_channels(self):
+    async def test_vk_failure_does_not_block_other_channels(self):
         settings = MarketCodeSettings(
             enabled=True,
             post_time="12:00",
@@ -186,22 +187,48 @@ class MarketCodePublisherTests(unittest.IsolatedAsyncioTestCase):
                 "fetch_brand_cover",
                 new=AsyncMock(return_value=b"image-bytes"),
             ),
+            patch.object(marketcode_publisher, "send_photo_with_caption", new=AsyncMock()) as send_cover,
+            patch.object(marketcode_publisher, "send_text", new=AsyncMock()) as send_text,
             patch.object(
                 marketcode_publisher,
-                "prepare_marketcode_vk_image",
-                new=AsyncMock(side_effect=RuntimeError("VK image rejected")),
-            ),
-            patch.object(marketcode_publisher, "send_photo_with_caption", new=AsyncMock()) as telegram,
-            patch.object(marketcode_publisher, "publish_to_max", new=AsyncMock()) as publish_max,
-            patch.object(marketcode_publisher, "publish_draft", new=AsyncMock()) as publish_dzen,
+                "publish_to_max",
+                new=AsyncMock(return_value="max-id"),
+            ) as publish_max,
+            patch.object(
+                marketcode_publisher,
+                "publish_marketcode_to_vk",
+                new=AsyncMock(side_effect=RuntimeError("VK wall.post rejected")),
+            ) as publish_vk,
+            patch.object(
+                marketcode_publisher,
+                "publish_draft",
+                new=AsyncMock(return_value="dzen-id"),
+            ) as publish_dzen,
             patch.object(marketcode_publisher, "save_publication") as save_publication,
         ):
             await marketcode_publisher.publish_marketcode_article()
 
-        telegram.assert_not_awaited()
-        publish_max.assert_not_awaited()
-        publish_dzen.assert_not_awaited()
-        save_publication.assert_not_called()
+        send_cover.assert_awaited_once_with(
+            marketcode_publisher.TELEGRAM_CHANNEL_ID,
+            b"image-bytes",
+            "",
+        )
+        send_text.assert_awaited_once_with(
+            marketcode_publisher.TELEGRAM_CHANNEL_ID,
+            article.full_text,
+        )
+        publish_max.assert_awaited_once_with(text=article.full_text, image_bytes=b"image-bytes")
+        publish_vk.assert_awaited_once_with(text=article.full_text)
+        publish_dzen.assert_awaited_once_with(
+            title=article.title,
+            text=article.body,
+            image_bytes=b"image-bytes",
+        )
+        statuses = save_publication.call_args.kwargs["channel_statuses"]
+        self.assertTrue(statuses["telegram"].startswith("published"))
+        self.assertTrue(statuses["max"].startswith("published"))
+        self.assertEqual(statuses["vk"], "failed: VK wall.post rejected")
+        self.assertTrue(statuses["dzen"].startswith("published"))
 
     async def test_article_is_not_split_for_any_channel(self):
         entry = ContentPlanEntry(
@@ -253,11 +280,6 @@ class MarketCodePublisherTests(unittest.IsolatedAsyncioTestCase):
             ) as publish_max,
             patch.object(
                 marketcode_publisher,
-                "prepare_marketcode_vk_image",
-                new=AsyncMock(return_value="prepared-vk-image"),
-            ) as prepare_vk,
-            patch.object(
-                marketcode_publisher,
                 "publish_marketcode_to_vk",
                 new=AsyncMock(return_value="vk-id"),
             ) as publish_vk,
@@ -280,15 +302,30 @@ class MarketCodePublisherTests(unittest.IsolatedAsyncioTestCase):
             article.full_text,
         )
         publish_max.assert_awaited_once_with(text=article.full_text, image_bytes=b"image-bytes")
-        prepare_vk.assert_awaited_once_with(b"image-bytes")
-        publish_vk.assert_awaited_once_with(
-            text=article.full_text,
-            prepared="prepared-vk-image",
-        )
+        publish_vk.assert_awaited_once_with(text=article.full_text)
         publish_dzen.assert_awaited_once_with(
             title=article.title,
             text=article.body,
             image_bytes=b"image-bytes",
+        )
+
+
+class MarketCodeVkTests(unittest.TestCase):
+    def test_publish_uses_wall_post_without_image_attachment(self):
+        with (
+            patch.object(marketcode_vk, "_require_group_id", return_value=123),
+            patch.object(marketcode_vk, "_call_vk", return_value={"post_id": 456}) as call_vk,
+        ):
+            result = marketcode_vk._publish("MarketCode text\n\nhttps://www.marketcode.pro")
+
+        self.assertEqual(result, "-123_456")
+        call_vk.assert_called_once_with(
+            "wall.post",
+            {
+                "owner_id": -123,
+                "from_group": 1,
+                "message": "MarketCode text\n\nhttps://www.marketcode.pro",
+            },
         )
 
 
