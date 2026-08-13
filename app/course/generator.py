@@ -26,11 +26,14 @@ class CourseAIClient:
     def __init__(self, model: str = COURSE_AI_MODEL, fallback_model: str = COURSE_AI_FALLBACK_MODEL):
         self.models = tuple(dict.fromkeys(item for item in (model, fallback_model) if item))
 
-    def complete(self, prompt: str) -> tuple[str, str]:
+    def complete(self, prompt: str, *, model: str | None = None) -> tuple[str, str]:
         if not OPENROUTER_API_KEY:
             raise CourseGenerationError("OPENROUTER_API_KEY is not set")
+        if model and model not in self.models:
+            raise CourseGenerationError(f"Course AI model is not configured: {model}")
         last_error: Exception | None = None
-        for model in self.models:
+        candidates = (model,) if model else self.models
+        for candidate in candidates:
             try:
                 response = requests.post(
                     _API_URL,
@@ -41,7 +44,7 @@ class CourseAIClient:
                         "X-OpenRouter-Title": "HochuVseZnat-AI",
                     },
                     json={
-                        "model": model,
+                        "model": candidate,
                         "messages": [{"role": "user", "content": prompt}],
                         "max_tokens": 2400,
                         "temperature": 0.35,
@@ -55,10 +58,10 @@ class CourseAIClient:
                 content = choice["message"]["content"].strip()
                 if not content:
                     raise ValueError("OpenRouter returned empty course lesson")
-                return content, model
+                return content, candidate
             except Exception as exc:
                 last_error = exc
-                logger.warning("Course model %s failed: %s", model, exc)
+                logger.warning("Course model %s failed: %s", candidate, exc)
         raise CourseGenerationError("All Course AI models failed") from last_error
 
 
@@ -111,26 +114,46 @@ def _parts(data: dict) -> tuple[CoursePart, ...]:
 
 def _generate_sync(lesson: CourseDay, sources: tuple[RetrievedSource, ...], client: CourseAIClient,
                    previous_reinforce_texts: tuple[str, ...] = ()) -> GeneratedLesson:
-    feedback = ""
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
-        raw, model = client.complete(_prompt(lesson, sources, feedback, previous_reinforce_texts))
-        try:
-            parts = _parts(_extract_json(raw))
-            validate_parts(parts, previous_reinforce_texts)
-        except (ValueError, KeyError, LessonQualityError) as exc:
-            feedback = (
-                f"Версия {attempt} отклонена. Исправь все ошибки и верни весь JSON заново: {exc}. "
-                "Не обрезай текст механически; заверши каждую часть естественно."
+    last_error = "No Course AI model completed generation"
+    for requested_model in client.models:
+        feedback = ""
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                raw, model = client.complete(
+                    _prompt(lesson, sources, feedback, previous_reinforce_texts),
+                    model=requested_model,
+                )
+            except CourseGenerationError as exc:
+                last_error = str(exc)
+                break
+            try:
+                parts = _parts(_extract_json(raw))
+                validate_parts(parts, previous_reinforce_texts)
+            except (ValueError, KeyError, LessonQualityError) as exc:
+                feedback = (
+                    f"Версия {attempt} отклонена. Исправь все ошибки и верни весь JSON заново: {exc}. "
+                    "Сокращай превышающие лимит части переписыванием, не добавляй новые детали. "
+                    "Не обрезай текст механически; заверши каждую часть естественно."
+                )
+                last_error = feedback
+                logger.warning(
+                    "Course lesson %s model %s quality attempt %d failed: %s",
+                    lesson.lesson_id, requested_model, attempt, exc,
+                )
+                continue
+            return GeneratedLesson(
+                lesson=lesson,
+                parts=parts,
+                model=model,
+                used_sources=tuple(item.source.url for item in sources),
             )
-            logger.warning("Course lesson %s quality attempt %d failed: %s", lesson.lesson_id, attempt, exc)
-            continue
-        return GeneratedLesson(
-            lesson=lesson,
-            parts=parts,
-            model=model,
-            used_sources=tuple(item.source.url for item in sources),
+        logger.warning(
+            "Course lesson %s model %s exhausted; trying next configured model",
+            lesson.lesson_id, requested_model,
         )
-    raise CourseGenerationError(f"Lesson {lesson.lesson_id} needs review after {_MAX_ATTEMPTS} attempts: {feedback}")
+    raise CourseGenerationError(
+        f"Lesson {lesson.lesson_id} needs review after all configured models: {last_error}"
+    )
 
 
 async def generate_lesson(lesson: CourseDay, sources: tuple[RetrievedSource, ...],

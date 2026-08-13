@@ -301,6 +301,40 @@ class QualityAndGenerationTests(unittest.TestCase):
         self.assertEqual(request.call_count, 2)
         self.assertEqual(request.call_args_list[1].kwargs["json"]["model"], "fallback/model")
 
+    def test_quality_exhaustion_uses_configured_fallback_model(self):
+        lesson = load_curriculum(CURRICULUM).lessons[0]
+        source = RetrievedSource(lesson.sources[0], "официальный материал " * 30, "hash")
+        invalid = json.dumps({item.value: "коротко" for item in PartType}, ensure_ascii=False)
+        valid = json.dumps({
+            "explain": _fitted(
+                "Генеративный интеллект создаёт новый ответ.", "Выберите пример.", 900,
+                "Модель использует закономерности учебного материала и строит продолжение. ",
+            ),
+            "try": _fitted(
+                "Проверяем генеративный интеллект на практике.", "Сравните два ответа.", 750,
+                "Задайте одну бытовую цель поиску и помощнику, затем отметьте различия. ",
+            ),
+            "reinforce": _fitted(
+                "Закрепляем отличие генерации от поиска.",
+                "Напишите найденное отличие в комментариях.", 550,
+                "Укажите, где появился новый ответ и где потребовалась проверка результата. ",
+            ),
+        }, ensure_ascii=False)
+        client = CourseAIClient("primary/model", "fallback/model")
+
+        def complete(_prompt, *, model=None):
+            return (invalid, model) if model == "primary/model" else (valid, model)
+
+        with patch.object(client, "complete", side_effect=complete) as call:
+            generated = _generate_sync(lesson, (source,), client)
+
+        self.assertEqual(generated.model, "fallback/model")
+        self.assertEqual(call.call_count, 4)
+        self.assertEqual(
+            [item.kwargs["model"] for item in call.call_args_list],
+            ["primary/model", "primary/model", "primary/model", "fallback/model"],
+        )
+
     def test_length_limits_and_coherence(self):
         parts = (
             CoursePart(PartType.EXPLAIN, "РАЗБИРАЕМ", _fitted("Объясняем языковую модель.", "Выберите пример.", 900, "Вероятное продолжение строится из элементов учебного материала. ")),
