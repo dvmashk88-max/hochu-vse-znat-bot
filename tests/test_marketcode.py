@@ -79,7 +79,7 @@ class MarketCodeGeneratorTests(unittest.TestCase):
         self.assertNotIn("Купить цифровые товары", cta)
 
     @patch("app.marketcode.generator._call_api")
-    def test_generation_appends_cta_after_valid_article(self, mock_call):
+    def test_safe_generation_passes_on_first_attempt(self, mock_call):
         article_body = " ".join(["полезная"] * 330)
         mock_call.return_value = (article_body, "test/model")
 
@@ -97,9 +97,47 @@ class MarketCodeGeneratorTests(unittest.TestCase):
 
         self.assertEqual(body, "Вступление")
 
-    def test_risky_guidance_allows_explicit_vpn_warning(self):
+    def test_risky_guidance_allows_do_not_use_vpn_warning(self):
         self.assertIsNone(_risky_guidance("Не используйте VPN для смены региона."))
+
+    def test_risky_guidance_allows_not_recommended_vpn_warning(self):
+        self.assertIsNone(_risky_guidance("Не рекомендуется использовать VPN для смены региона."))
+
+    def test_risky_guidance_blocks_vpn_recommendation(self):
         self.assertEqual(_risky_guidance("Используйте VPN для смены региона."), "используйте vpn")
+
+    @patch("app.marketcode.generator._call_api")
+    def test_unsafe_first_attempt_regenerates_and_safe_version_passes(self, mock_call):
+        unsafe_body = "Используйте VPN для смены региона. " + " ".join(["полезный"] * 310)
+        safe_body = "Не используйте VPN для смены региона. " + " ".join(["полезный"] * 310)
+        mock_call.side_effect = [
+            (unsafe_body, "test/model"),
+            (unsafe_body, "test/model"),
+            (safe_body, "test/model"),
+            (safe_body, "test/model"),
+        ]
+
+        result = _generate_sync(self.entry, self.settings)
+
+        self.assertIn("Не используйте VPN", result.body)
+        self.assertEqual(mock_call.call_count, 4)
+        retry_prompt = mock_call.call_args_list[2].args[0]
+        self.assertIn("MarketCode article contains risky guidance: используйте vpn", retry_prompt)
+        self.assertIn(self.entry.topic, retry_prompt)
+        self.assertIn(self.entry.goal, retry_prompt)
+
+    @patch("app.marketcode.generator._call_api")
+    def test_three_unsafe_attempts_return_controlled_error(self, mock_call):
+        unsafe_body = "Используйте VPN для смены региона. " + " ".join(["полезный"] * 310)
+        mock_call.return_value = (unsafe_body, "test/model")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "failed safety validation after 3 attempts.*используйте vpn",
+        ):
+            _generate_sync(self.entry, self.settings)
+
+        self.assertEqual(mock_call.call_count, 6)
 
     @patch("app.marketcode.generator._call_api")
     def test_generation_rejects_forbidden_payment_guidance(self, mock_call):

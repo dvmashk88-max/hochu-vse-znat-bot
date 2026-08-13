@@ -21,7 +21,8 @@ _MAX_WORDS = 500
 _MIN_BODY_WORDS = 275
 _MAX_BODY_WORDS = 440
 _MAX_ARTICLE_CHARS = 3800
-_MAX_GENERATION_ATTEMPTS = 3
+_MAX_REFINEMENT_ATTEMPTS = 3
+_MAX_SAFETY_GENERATION_ATTEMPTS = 3
 _BANNED_CTA = "купить цифровые товары"
 _SITE_URL = "https://www.marketcode.pro"
 _RISKY_GUIDANCE = (
@@ -39,6 +40,8 @@ _SAFE_RISK_NEGATIONS = (
     "не используйте vpn",
     "не использовать vpn",
     "не применяйте vpn",
+    "не рекомендуется использовать vpn",
+    "не стоит использовать vpn",
 )
 _FORBIDDEN_PAYMENT_GUIDANCE = (
     "киви",
@@ -77,6 +80,10 @@ class GeneratedArticle:
     @property
     def full_text(self) -> str:
         return f"{self.title}\n\n{self.body}"
+
+
+class MarketCodeSafetyError(ValueError):
+    pass
 
 
 _CTA_BY_CATEGORY = {
@@ -211,6 +218,23 @@ def _quality_review_prompt(entry: ContentPlanEntry, body: str) -> str:
 """.strip()
 
 
+def _safety_regeneration_prompt(entry: ContentPlanEntry, body: str, reason: str) -> str:
+    return f"""
+Предыдущая версия статьи была отклонена safety-валидатором.
+Причина отклонения: {reason}
+
+Полностью перепиши материал на ту же тему «{entry.topic}» и сохрани его исходную цель: {entry.goal}
+Удали запрещённую рекомендацию и любые равнозначные советы. Не ослабляй предупреждения безопасности.
+Сохрани полезные факты, пошаговую структуру, советы, короткий FAQ и вывод.
+Основная часть должна содержать {_MIN_BODY_WORDS}–{_MAX_BODY_WORDS} слов.
+Не добавляй отдельный заголовок H1, рекламу, ссылки, CTA или комментарии о проверке.
+Верни только новую безопасную основную часть статьи.
+
+Отклонённая версия:
+{body}
+""".strip()
+
+
 def _normalize_body(text: str, title: str) -> str:
     body = text.strip()
     body = re.sub(r"^```(?:markdown)?\s*|\s*```$", "", body, flags=re.IGNORECASE)
@@ -221,14 +245,17 @@ def _normalize_body(text: str, title: str) -> str:
     return body.strip()
 
 
-def _generate_sync(entry: ContentPlanEntry, settings: MarketCodeSettings) -> GeneratedArticle:
-    prompt = _load_prompt(entry)
+def _generate_candidate(
+    entry: ContentPlanEntry,
+    settings: MarketCodeSettings,
+    prompt: str,
+) -> tuple[str, str]:
     body, model = _call_api(prompt, settings)
     body = _normalize_body(body, entry.topic)
     body, model = _call_api(_quality_review_prompt(entry, body), settings)
     body = _normalize_body(body, entry.topic)
 
-    for _ in range(_MAX_GENERATION_ATTEMPTS):
+    for _ in range(_MAX_REFINEMENT_ATTEMPTS):
         words = _word_count(body)
         full_body = f"{body}\n\n{_cta(entry.category)}"
         full_text = f"{entry.topic}\n\n{full_body}"
@@ -240,23 +267,30 @@ def _generate_sync(entry: ContentPlanEntry, settings: MarketCodeSettings) -> Gen
         )
         body = _normalize_body(body, entry.topic)
 
-    words = _word_count(body)
-    if not _MIN_BODY_WORDS <= words <= _MAX_BODY_WORDS:
-        raise ValueError(
-            f"MarketCode article body has {words} words; expected {_MIN_BODY_WORDS}-{_MAX_BODY_WORDS}"
-        )
+    return body, model
+
+
+def _validate_safety(body: str) -> None:
     if _BANNED_CTA in body.lower():
-        raise ValueError("MarketCode article contains the forbidden generic CTA")
+        raise MarketCodeSafetyError("MarketCode article contains the forbidden generic CTA")
     risky_phrase = _risky_guidance(body)
     if risky_phrase:
-        raise ValueError(f"MarketCode article contains risky guidance: {risky_phrase}")
+        raise MarketCodeSafetyError(f"MarketCode article contains risky guidance: {risky_phrase}")
     forbidden_payment = next(
         (phrase for phrase in _FORBIDDEN_PAYMENT_GUIDANCE if phrase in body.lower()),
         None,
     )
     if forbidden_payment:
-        raise ValueError(
+        raise MarketCodeSafetyError(
             f"MarketCode article contains forbidden payment guidance: {forbidden_payment}"
+        )
+
+
+def _build_article(entry: ContentPlanEntry, body: str, model: str) -> GeneratedArticle:
+    words = _word_count(body)
+    if not _MIN_BODY_WORDS <= words <= _MAX_BODY_WORDS:
+        raise ValueError(
+            f"MarketCode article body has {words} words; expected {_MIN_BODY_WORDS}-{_MAX_BODY_WORDS}"
         )
 
     full_body = f"{body}\n\n{_cta(entry.category)}"
@@ -276,6 +310,33 @@ def _generate_sync(entry: ContentPlanEntry, settings: MarketCodeSettings) -> Gen
         word_count=full_word_count,
         model=model,
     )
+
+
+def _generate_sync(entry: ContentPlanEntry, settings: MarketCodeSettings) -> GeneratedArticle:
+    prompt = _load_prompt(entry)
+
+    for attempt in range(1, _MAX_SAFETY_GENERATION_ATTEMPTS + 1):
+        body, model = _generate_candidate(entry, settings, prompt)
+        try:
+            _validate_safety(body)
+        except MarketCodeSafetyError as exc:
+            if attempt == _MAX_SAFETY_GENERATION_ATTEMPTS:
+                raise MarketCodeSafetyError(
+                    "MarketCode article failed safety validation after "
+                    f"{_MAX_SAFETY_GENERATION_ATTEMPTS} attempts: {exc}"
+                ) from exc
+            logger.warning(
+                "MarketCode safety validation rejected attempt %d/%d: %s",
+                attempt,
+                _MAX_SAFETY_GENERATION_ATTEMPTS,
+                exc,
+            )
+            prompt = _safety_regeneration_prompt(entry, body, str(exc))
+            continue
+
+        return _build_article(entry, body, model)
+
+    raise RuntimeError("MarketCode generation attempts were unexpectedly exhausted")
 
 
 async def generate_article(entry: ContentPlanEntry, settings: MarketCodeSettings) -> GeneratedArticle:
