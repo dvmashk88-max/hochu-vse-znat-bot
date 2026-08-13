@@ -11,7 +11,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from PIL import Image
 
 from app.course import repository
-from app.course.covers import SAFE_MARGIN, SIZE, cover_layout, cover_metadata, render_cover
+from app.course.covers import FONT_CANDIDATES, SAFE_MARGIN, SIZE, cover_layout, cover_metadata, render_cover
 from app.course.curriculum import CurriculumError, load_curriculum, load_curriculum_catalog
 from app.course.generator import CourseAIClient, _generate_sync
 from app.course.models import CoursePart, GeneratedLesson, PartType, RetrievedSource, Source
@@ -334,6 +334,8 @@ class QualityAndGenerationTests(unittest.TestCase):
             [item.kwargs["model"] for item in call.call_args_list],
             ["primary/model", "primary/model", "primary/model", "fallback/model"],
         )
+        self.assertIn(invalid, call.call_args_list[1].args[0])
+        self.assertIn(invalid, call.call_args_list[3].args[0])
 
     def test_length_limits_and_coherence(self):
         parts = (
@@ -422,6 +424,16 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CoverTests(unittest.TestCase):
+    def test_production_liberation_font_paths_are_supported(self):
+        self.assertIn(
+            Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+            FONT_CANDIDATES[False],
+        )
+        self.assertIn(
+            Path("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"),
+            FONT_CANDIDATES[True],
+        )
+
     def test_cover_is_square_deterministic_and_uses_safe_margin(self):
         lesson = load_curriculum(CURRICULUM).lessons[0]
         first, first_hash = render_cover(lesson, PartType.EXPLAIN, "missing-base.png")

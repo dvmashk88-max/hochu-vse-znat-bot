@@ -14,6 +14,23 @@ SAFE_MARGIN = 96
 TEXT_SAFE_MARGIN = 120
 MIN_TITLE_FONT = 38
 
+FONT_CANDIDATES = {
+    False: (
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+        Path("/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"),
+        Path("/usr/share/fonts/truetype/freefont/FreeSans.ttf"),
+        Path("/System/Library/Fonts/SFNS.ttf"),
+    ),
+    True: (
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+        Path("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"),
+        Path("/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"),
+        Path("/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"),
+        Path("/System/Library/Fonts/SFNS.ttf"),
+    ),
+}
+
 SEASON_THEMES = {
     1: {"name": "foundation-orbits", "top": (9, 20, 52), "bottom": (22, 70, 91), "accent": "#67F5D1", "glow": "#3E5BFF"},
     2: {"name": "prompt-signals", "top": (24, 14, 58), "bottom": (73, 24, 105), "accent": "#FF77D5", "glow": "#7C4DFF"},
@@ -51,12 +68,7 @@ class CoverLayout:
 
 
 def _font(size: int, bold: bool = False):
-    candidates = [
-        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-        Path("/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"),
-        Path("/System/Library/Fonts/SFNS.ttf"),
-    ]
-    for path in candidates:
+    for path in FONT_CANDIDATES[bold]:
         if path.exists():
             return ImageFont.truetype(str(path), size=size)
     raise RuntimeError("Course cover renderer requires a local Cyrillic TrueType font")

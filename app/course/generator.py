@@ -115,8 +115,8 @@ def _parts(data: dict) -> tuple[CoursePart, ...]:
 def _generate_sync(lesson: CourseDay, sources: tuple[RetrievedSource, ...], client: CourseAIClient,
                    previous_reinforce_texts: tuple[str, ...] = ()) -> GeneratedLesson:
     last_error = "No Course AI model completed generation"
+    feedback = ""
     for requested_model in client.models:
-        feedback = ""
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             try:
                 raw, model = client.complete(
@@ -130,12 +130,13 @@ def _generate_sync(lesson: CourseDay, sources: tuple[RetrievedSource, ...], clie
                 parts = _parts(_extract_json(raw))
                 validate_parts(parts, previous_reinforce_texts)
             except (ValueError, KeyError, LessonQualityError) as exc:
+                last_error = f"Версия {attempt} модели {requested_model} отклонена: {exc}"
                 feedback = (
                     f"Версия {attempt} отклонена. Исправь все ошибки и верни весь JSON заново: {exc}. "
                     "Сокращай превышающие лимит части переписыванием, не добавляй новые детали. "
-                    "Не обрезай текст механически; заверши каждую часть естественно."
+                    "Не обрезай текст механически; заверши каждую часть естественно.\n"
+                    f"Отклонённый JSON, который нужно именно отредактировать:\n{raw}"
                 )
-                last_error = feedback
                 logger.warning(
                     "Course lesson %s model %s quality attempt %d failed: %s",
                     lesson.lesson_id, requested_model, attempt, exc,
