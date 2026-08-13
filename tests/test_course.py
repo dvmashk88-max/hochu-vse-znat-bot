@@ -13,7 +13,7 @@ from PIL import Image
 from app.course import repository
 from app.course.covers import FONT_CANDIDATES, SAFE_MARGIN, SIZE, cover_layout, cover_metadata, render_cover
 from app.course.curriculum import CurriculumError, load_curriculum, load_curriculum_catalog
-from app.course.generator import CourseAIClient, _generate_sync
+from app.course.generator import CourseAIClient, _generate_sync, _trim_complete_sentences
 from app.course.models import CoursePart, GeneratedLesson, PartType, RetrievedSource, Source
 from app.course.quality import LessonQualityError, validate_parts
 from app.course.reconciliation import decide_reconciliation
@@ -253,6 +253,23 @@ class DatabaseTests(unittest.TestCase):
 
 
 class QualityAndGenerationTests(unittest.TestCase):
+    def test_over_limit_text_is_trimmed_only_at_complete_sentence_boundaries(self):
+        sentences = [
+            f"Предложение номер {index} содержит полезное пояснение для учебного материала и пример."
+            for index in range(1, 16)
+        ]
+        sentences.append("Напишите итог наблюдения в комментариях.")
+        text = " ".join(sentences)
+
+        trimmed = _trim_complete_sentences(text, 450, 750)
+
+        self.assertGreater(len(text), 750)
+        self.assertGreaterEqual(len(trimmed), 450)
+        self.assertLessEqual(len(trimmed), 750)
+        self.assertTrue(trimmed.endswith("Напишите итог наблюдения в комментариях."))
+        self.assertNotIn("Предложение номер 15", trimmed)
+        self.assertTrue(trimmed.endswith("."))
+
     def test_course_ai_headers_are_ascii_safe_and_primary_request_is_sent(self):
         response = Mock()
         response.raise_for_status.return_value = None

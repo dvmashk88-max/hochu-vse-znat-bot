@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 
 import requests
 
 from app.config import COURSE_AI_FALLBACK_MODEL, COURSE_AI_MODEL, OPENROUTER_API_KEY
 from app.course.models import CourseDay, CoursePart, GeneratedLesson, PartType, RetrievedSource
-from app.course.quality import LessonQualityError, validate_parts
+from app.course.quality import LIMITS, LessonQualityError, validate_parts
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,33 @@ def _parts(data: dict) -> tuple[CoursePart, ...]:
     )
 
 
+def _trim_complete_sentences(text: str, minimum: int, maximum: int) -> str:
+    normalized = text.strip()
+    if len(normalized) <= maximum:
+        return normalized
+    sentences = re.split(r"(?<=[.!?])\s+", normalized)
+    while len(" ".join(sentences)) > maximum and len(sentences) > 2:
+        candidate = " ".join((*sentences[:-2], sentences[-1]))
+        if len(candidate) < minimum:
+            break
+        sentences.pop(-2)
+    return " ".join(sentences)
+
+
+def _normalize_part_lengths(parts: tuple[CoursePart, ...]) -> tuple[CoursePart, ...]:
+    normalized = []
+    for part in parts:
+        minimum, maximum = LIMITS[part.part_type]
+        text = _trim_complete_sentences(part.text, minimum, maximum)
+        if len(text) != len(part.text):
+            logger.info(
+                "Course part normalized at sentence boundary: part=%s before=%d after=%d",
+                part.part_type.value, len(part.text), len(text),
+            )
+        normalized.append(CoursePart(part.part_type, part.title, text))
+    return tuple(normalized)
+
+
 def _generate_sync(lesson: CourseDay, sources: tuple[RetrievedSource, ...], client: CourseAIClient,
                    previous_reinforce_texts: tuple[str, ...] = ()) -> GeneratedLesson:
     last_error = "No Course AI model completed generation"
@@ -127,7 +155,7 @@ def _generate_sync(lesson: CourseDay, sources: tuple[RetrievedSource, ...], clie
                 last_error = str(exc)
                 break
             try:
-                parts = _parts(_extract_json(raw))
+                parts = _normalize_part_lengths(_parts(_extract_json(raw)))
                 validate_parts(parts, previous_reinforce_texts)
             except (ValueError, KeyError, LessonQualityError) as exc:
                 last_error = f"Версия {attempt} модели {requested_model} отклонена: {exc}"
