@@ -336,6 +336,7 @@ class QualityAndGenerationTests(unittest.TestCase):
         )
         self.assertIn(invalid, call.call_args_list[1].args[0])
         self.assertIn(invalid, call.call_args_list[3].args[0])
+        self.assertIn("ниже минимума содержательно дополни", call.call_args_list[1].args[0])
 
     def test_length_limits_and_coherence(self):
         parts = (
