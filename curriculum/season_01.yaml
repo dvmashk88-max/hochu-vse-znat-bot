@@ -1,0 +1,245 @@
+version: 1
+season:
+  id: season-01
+  number: 1
+  title: Август 2026
+  month: 2026-08
+  timezone: Europe/Moscow
+
+courses:
+  - id: course-01
+    number: 1
+    title: ИИ без путаницы
+    start_date: 2026-08-14
+    end_date: 2026-08-28
+    lessons:
+      - id: lesson-01
+        date: 2026-08-14
+        topic: Что такое современный генеративный ИИ
+        short_title: Генеративный ИИ
+        learning_goal: Отличать генеративный ИИ от обычной программы и поиска.
+        explain_objective: Объяснить генерацию нового ответа на основе найденных в обучении закономерностей.
+        try_objective: Сравнить обычный поиск и генеративный ответ на одном бытовом запросе.
+        reinforce_objective: Сформулировать своими словами главное отличие генерации от поиска.
+        sources:
+          - title: Введение в генеративный ИИ — Microsoft Learn
+            url: https://learn.microsoft.com/en-us/training/modules/fundamentals-generative-ai/
+
+      - id: lesson-02
+        date: 2026-08-15
+        topic: Как языковая модель работает с текстом
+        short_title: Языковые модели
+        learning_goal: Понимать, почему языковая модель продолжает текст, а не думает как человек.
+        explain_objective: Объяснить токены, контекст и предсказание продолжения без математики.
+        try_objective: Проверить, как изменение начала фразы меняет вероятное продолжение.
+        reinforce_objective: Найти пример, где правдоподобное продолжение не гарантирует истинность.
+        sources:
+          - title: Introduction to large language models — Google
+            url: https://developers.google.com/machine-learning/resources/intro-llms
+
+      - id: lesson-03
+        date: 2026-08-16
+        topic: Что современные AI-помощники умеют делать полезно
+        short_title: Возможности ИИ
+        learning_goal: Выбирать задачи, в которых генеративный помощник действительно экономит время.
+        explain_objective: Показать сильные сценарии — объяснение, черновик, преобразование и анализ предоставленного текста.
+        try_objective: Превратить неструктурированные заметки в понятный список действий.
+        reinforce_objective: Определить одну личную задачу, подходящую для такого преобразования.
+        sources:
+          - title: Возможности AI-помощника на примере ChatGPT — OpenAI
+            url: https://help.openai.com/en/articles/9260256-chatgpt-capabilities-overview
+
+      - id: lesson-04
+        date: 2026-08-17
+        topic: Чего современные AI-системы не умеют гарантировать
+        short_title: Границы ИИ
+        learning_goal: Не путать уверенный ответ с проверенным фактом или профессиональной гарантией.
+        explain_objective: Разобрать ограничения знаний, точности и понимания намерений пользователя.
+        try_objective: Найти в тестовом ответе утверждения, которые требуют отдельной проверки.
+        reinforce_objective: Составить личное правило, когда ответу нельзя доверять без источника.
+        sources:
+          - title: Does ChatGPT tell the truth? — OpenAI
+            url: https://help.openai.com/en/articles/8313428-does-chatgpt-tell-the-truth
+
+      - id: lesson-05
+        date: 2026-08-18
+        topic: Как правильно поставить задачу ИИ
+        short_title: Постановка задачи
+        learning_goal: Формулировать понятную инструкцию с действием и ожидаемым результатом.
+        explain_objective: Показать отличие размытого запроса от конкретной задачи.
+        try_objective: Переписать один расплывчатый запрос по формуле действие плюс результат.
+        reinforce_objective: Сравнить исходный и улучшенный ответы и описать разницу.
+        sources:
+          - title: Create effective prompts — Microsoft Learn
+            url: https://learn.microsoft.com/en-us/training/modules/create-prompts-for-generative-ai-training-tools/
+
+      - id: lesson-06
+        date: 2026-08-19
+        topic: Зачем давать модели контекст
+        short_title: Полезный контекст
+        learning_goal: Добавлять только сведения, которые помогают выполнить конкретную задачу.
+        explain_objective: Объяснить роль контекста и опасность недостающих исходных данных.
+        try_objective: Дополнить запрос аудиторией, ситуацией и исходными фактами.
+        reinforce_objective: Указать, какой элемент контекста сильнее всего изменил результат.
+        sources:
+          - title: Prompt engineering concepts — Microsoft Learn
+            url: https://learn.microsoft.com/en-us/ai-builder/create-a-custom-prompt
+
+      - id: lesson-07
+        date: 2026-08-20
+        topic: Как заранее задать формат ответа
+        short_title: Формат результата
+        learning_goal: Получать результат в форме, которую можно сразу использовать.
+        explain_objective: Показать, как ограничения структуры, длины и тона направляют ответ.
+        try_objective: Запросить одну информацию в виде таблицы, списка и короткого сообщения.
+        reinforce_objective: Выбрать самый удобный формат и объяснить выбор в комментариях.
+        sources:
+          - title: Prompt engineering overview — Anthropic
+            url: https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/overview
+
+      - id: lesson-08
+        date: 2026-08-21
+        topic: Как уточнять инструкции после первого ответа
+        short_title: Уточнение запроса
+        learning_goal: Улучшать результат короткими проверяемыми итерациями вместо полного перезапуска.
+        explain_objective: Объяснить итеративную работу и полезную обратную связь модели.
+        try_objective: Улучшить один ответ двумя последовательными уточнениями.
+        reinforce_objective: Написать, какое уточнение дало наибольший эффект и почему.
+        sources:
+          - title: Prompt engineering best practices — OpenAI
+            url: https://help.openai.com/en/articles/6654000-best-practices-for-prompt-engineering-with-the-openai-api
+
+      - id: lesson-09
+        date: 2026-08-22
+        topic: Почему ИИ ошибается и галлюцинирует
+        short_title: Ошибки и галлюцинации
+        learning_goal: Узнавать правдоподобные выдумки и не усиливать их доверительным тоном запроса.
+        explain_objective: Объяснить галлюцинацию как уверенное создание неверного содержания.
+        try_objective: Попросить модель отделить известное, предположение и неизвестное.
+        reinforce_objective: Найти один сигнал сомнительного ответа и поделиться им.
+        sources:
+          - title: Does ChatGPT tell the truth? — OpenAI
+            url: https://help.openai.com/en/articles/8313428-does-chatgpt-tell-the-truth
+
+      - id: lesson-10
+        date: 2026-08-23
+        topic: Как проверять информацию из ответа ИИ
+        short_title: Проверка информации
+        learning_goal: Проверять важные утверждения по первичному источнику.
+        explain_objective: Дать простой порядок проверки факта, даты, цитаты и ссылки.
+        try_objective: Выбрать одно утверждение и найти подтверждение на официальном сайте.
+        reinforce_objective: Сообщить в комментариях, подтвердился ли факт и где он был проверен.
+        sources:
+          - title: Introduction to responsible AI — Microsoft Learn
+            url: https://learn.microsoft.com/en-us/training/modules/embrace-responsible-ai-principles-practices/
+
+      - id: lesson-11
+        date: 2026-08-24
+        topic: Как использовать ИИ для работы с текстом
+        short_title: Работа с текстом
+        learning_goal: Редактировать собственный текст, сохраняя смысл и авторскую ответственность.
+        explain_objective: Разделить задачи черновика, сокращения, изменения тона и проверки структуры.
+        try_objective: Переписать один абзац для конкретной аудитории с сохранением фактов.
+        reinforce_objective: Сравнить версии и назвать одно улучшение и одну потерю.
+        sources:
+          - title: Text generation and prompting — OpenAI
+            url: https://platform.openai.com/docs/guides/text
+
+      - id: lesson-12
+        date: 2026-08-25
+        topic: Как работать с документами и файлами
+        short_title: Документы и файлы
+        learning_goal: Давать документу конкретную задачу и учитывать ограничения извлечения содержимого.
+        explain_objective: Показать сценарии извлечения, сравнения, резюме и поиска структуры.
+        try_objective: Загрузить безопасный несекретный документ и запросить структурированное резюме.
+        reinforce_objective: Написать, что модель нашла верно и что пришлось проверить вручную.
+        sources:
+          - title: File Uploads FAQ — OpenAI
+            url: https://help.openai.com/en/articles/8555545-uploading-files-in-chatgpt
+
+      - id: lesson-13
+        date: 2026-08-26
+        topic: ИИ в повседневных задачах
+        short_title: ИИ в быту
+        learning_goal: Применять изученную схему запроса в безопасной повседневной задаче.
+        explain_objective: Разобрать планирование, сравнение вариантов и подготовку черновиков без передачи секретов.
+        try_objective: Составить план реальной бытовой задачи с критериями и ограничениями.
+        reinforce_objective: Поделиться полезным шагом плана и тем, что пришлось уточнить.
+        sources:
+          - title: ChatGPT Capabilities Overview — OpenAI
+            url: https://help.openai.com/en/articles/9260256-chatgpt-capabilities-overview
+
+      - id: lesson-14
+        date: 2026-08-27
+        topic: ИИ в рабочих задачах
+        short_title: ИИ для работы
+        learning_goal: Делегировать ИИ подготовительную работу, не передавая ему финальную ответственность.
+        explain_objective: Показать безопасный цикл черновик, проверка, исправление и человеческое решение.
+        try_objective: Подготовить шаблон рабочего результата без конфиденциальных данных.
+        reinforce_objective: Написать профессию, выбранную задачу и обязательный шаг человеческой проверки.
+        sources:
+          - title: Responsible AI principles — Microsoft
+            url: https://www.microsoft.com/en-us/ai/principles-and-approach
+
+      - id: lesson-15
+        date: 2026-08-28
+        topic: Итоговая практическая работа — полезный запрос от начала до проверки
+        short_title: Итоговая работа
+        learning_goal: Самостоятельно пройти полный цикл постановки задачи, контекста, формата, уточнения и проверки.
+        explain_objective: Собрать изученные элементы в единый повторяемый рабочий процесс.
+        try_objective: Решить одну реальную задачу по полному шаблону курса и проверить результат.
+        reinforce_objective: Опубликовать краткий итог, лучший вариант запроса и главный вывод курса.
+        sources:
+          - title: Create effective prompts — Microsoft Learn
+            url: https://learn.microsoft.com/en-us/training/modules/create-prompts-for-generative-ai-training-tools/
+          - title: Does ChatGPT tell the truth? — OpenAI
+            url: https://help.openai.com/en/articles/8313428-does-chatgpt-tell-the-truth
+
+special_days:
+  - id: special-2026-08-29
+    date: 2026-08-29
+    kind: review
+    cover_label: СПЕЦИАЛЬНЫЙ УРОК
+    topic: "Повторяем главное: 10 правил работы с ИИ"
+    short_title: 10 правил работы с ИИ
+    learning_goal: Собрать ключевые правила первого курса в короткую личную памятку.
+    explain_objective: Повторить десять практических правил безопасной и осознанной работы с AI-системами.
+    try_objective: Отметить освоенные правила и выбрать два, которые нужно применять внимательнее.
+    reinforce_objective: Сформулировать главное личное правило и поделиться им в комментариях.
+    sources:
+      - title: Принципы ответственного ИИ — Microsoft
+        url: https://www.microsoft.com/en-us/ai/principles-and-approach
+      - title: Лучшие практики prompt engineering — OpenAI
+        url: https://help.openai.com/en/articles/6654000-best-practices-for-prompt-engineering-with-the-openai-api
+
+  - id: special-2026-08-30
+    date: 2026-08-30
+    kind: review
+    cover_label: СПЕЦИАЛЬНЫЙ УРОК
+    topic: Разбираем типичные ошибки новичков
+    short_title: Ошибки новичков
+    learning_goal: Узнавать распространённые ошибки при работе с ИИ и исправлять их до получения результата.
+    explain_objective: Разобрать расплывчатую задачу, отсутствие контекста, слепое доверие и передачу лишних данных.
+    try_objective: Найти ошибки в учебном запросе и переписать его безопаснее и конкретнее.
+    reinforce_objective: Назвать ошибку, которую читатель теперь будет проверять в первую очередь.
+    sources:
+      - title: Лучшие практики prompt engineering — OpenAI
+        url: https://help.openai.com/en/articles/6654000-best-practices-for-prompt-engineering-with-the-openai-api
+      - title: Принципы ответственного ИИ — Microsoft
+        url: https://www.microsoft.com/en-us/ai/principles-and-approach
+
+  - id: special-2026-08-31
+    date: 2026-08-31
+    kind: season_summary
+    cover_label: ИТОГИ СЕЗОНА
+    topic: Что мы освоили за август и что будет дальше
+    short_title: Итоги августа
+    learning_goal: Осознать освоенные навыки и подготовиться к сентябрьским курсам о промптах.
+    explain_objective: Кратко связать понимание ИИ, постановку задачи, контекст, формат и проверку результата.
+    try_objective: Выполнить небольшую итоговую задачу по полному циклу и отметить самый полезный навык.
+    reinforce_objective: Пригласить рассказать о полезном навыке и анонсировать два сентябрьских курса.
+    sources:
+      - title: Создание эффективных prompts — Microsoft Learn
+        url: https://learn.microsoft.com/en-us/training/modules/create-prompts-for-generative-ai-training-tools/
+      - title: Проверка правдивости AI-ответов — OpenAI
+        url: https://help.openai.com/en/articles/8313428-does-chatgpt-tell-the-truth

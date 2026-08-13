@@ -1,0 +1,464 @@
+import json
+import tempfile
+import unittest
+from dataclasses import replace
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from PIL import Image
+
+from app.course import repository
+from app.course.covers import SAFE_MARGIN, SIZE, cover_layout, cover_metadata, render_cover
+from app.course.curriculum import CurriculumError, load_curriculum, load_curriculum_catalog
+from app.course.generator import CourseAIClient, _generate_sync
+from app.course.models import CoursePart, GeneratedLesson, PartType, RetrievedSource, Source
+from app.course.quality import LessonQualityError, validate_parts
+from app.course.reconciliation import decide_reconciliation
+from app.course.repository import StoredPart
+from app.course.service import _publish_platform, _telegram, publish_lesson_part
+from app.course.sources import SourceRetrievalError, SourceRetriever
+from app.database import Database, UnsupportedDatabaseURL, parse_database_url
+from app import db as legacy_db
+from app.marketcode.config import MarketCodeSettings
+from app.scheduler import configure_scheduler
+from app.config import COURSE_AI_FALLBACK_MODEL, COURSE_AI_MODEL
+
+
+ROOT = Path(__file__).resolve().parents[1]
+CURRICULUM = ROOT / "curriculum" / "season_01.yaml"
+CURRICULUM_DIR = ROOT / "curriculum"
+
+
+def _fitted(prefix: str, action: str, length: int, filler: str) -> str:
+    text = f"{prefix} {action} Контекст помогает выполнить задачу и проверить результат. "
+    while len(text) + len(filler) <= length - 2:
+        text += filler
+    return (text + "Итог.")[:length].rsplit(" ", 1)[0] + "."
+
+
+class CurriculumTests(unittest.TestCase):
+    def setUp(self):
+        self.plan = load_curriculum(CURRICULUM)
+
+    def test_season_and_course_boundaries(self):
+        self.assertEqual(self.plan.version, 1)
+        self.assertEqual(self.plan.season_id, "season-01")
+        self.assertEqual(len(self.plan.lessons), 15)
+        self.assertEqual(self.plan.lessons[0].date, date(2026, 8, 14))
+        self.assertEqual(self.plan.lessons[-1].date, date(2026, 8, 28))
+
+    def test_resolves_lesson_by_date(self):
+        self.assertEqual(self.plan.lesson_for_date(date(2026, 8, 20)).lesson_number, 7)
+        self.assertIsNone(self.plan.lesson_for_date(date(2026, 8, 29)))
+
+    def test_31st_day_is_explicit_special_day(self):
+        special = self.plan.special_day_for_date(date(2026, 8, 31))
+        self.assertEqual(special.kind, "season_summary")
+        self.assertIsNone(self.plan.lesson_for_date(date(2026, 8, 31)))
+
+    def test_all_lessons_have_sources_and_objectives(self):
+        for lesson in self.plan.lessons:
+            self.assertTrue(lesson.sources)
+            self.assertTrue(lesson.explain_objective)
+            self.assertTrue(lesson.try_objective)
+            self.assertTrue(lesson.reinforce_objective)
+
+    def test_duplicate_date_fails_fast(self):
+        text = CURRICULUM.read_text(encoding="utf-8").replace("2026-08-15", "2026-08-14", 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bad.yaml"
+            path.write_text(text, encoding="utf-8")
+            with self.assertRaisesRegex(CurriculumError, "duplicate lesson date"):
+                load_curriculum(path)
+
+    def test_course_must_stay_inside_season_month(self):
+        text = CURRICULUM.read_text(encoding="utf-8").replace("month: 2026-08", "month: 2026-09", 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bad-month.yaml"
+            path.write_text(text, encoding="utf-8")
+            with self.assertRaisesRegex(CurriculumError, "season month"):
+                load_curriculum(path)
+
+    def test_catalog_has_seasons_one_to_five_and_courses_one_to_nine(self):
+        catalog = load_curriculum_catalog(CURRICULUM_DIR)
+        self.assertEqual([item.season_number for item in catalog.seasons], list(range(1, 6)))
+        self.assertEqual(sorted({item.course_number for item in catalog.lessons}), list(range(1, 10)))
+        self.assertEqual(len(catalog.lessons), 135)
+        for course_number in range(1, 10):
+            lessons = [item for item in catalog.lessons if item.course_number == course_number]
+            self.assertEqual(len(lessons), 15)
+            self.assertEqual([item.lesson_number for item in lessons], list(range(1, 16)))
+
+    def test_catalog_covers_every_day_through_end_of_2026_without_duplicates(self):
+        catalog = load_curriculum_catalog(CURRICULUM_DIR)
+        expected = [date(2026, 8, 14) + timedelta(days=offset) for offset in range(140)]
+        actual = [item.date for item in catalog.days]
+        self.assertEqual(actual, expected)
+        self.assertEqual(len(actual), len(set(actual)))
+        self.assertTrue(all(day.sources for day in catalog.days))
+
+    def test_all_required_special_days_are_resolved_as_special(self):
+        catalog = load_curriculum_catalog(CURRICULUM_DIR)
+        expected = {
+            date(2026, 8, 29), date(2026, 8, 30), date(2026, 8, 31),
+            date(2026, 10, 31), date(2026, 12, 31),
+        }
+        self.assertEqual({item.date for item in catalog.special_days}, expected)
+        for target in expected:
+            day = catalog.day_for_date(target)
+            self.assertEqual(day.day_type, "special")
+            self.assertIsNone(catalog.lesson_for_date(target))
+
+    def test_catalog_has_no_placeholders_or_product_bound_course_titles(self):
+        catalog = load_curriculum_catalog(CURRICULUM_DIR)
+        serialized = " ".join(
+            f"{item.topic} {item.learning_goal} {item.explain_objective} "
+            f"{item.try_objective} {item.reinforce_objective}" for item in catalog.days
+        ).lower()
+        self.assertNotIn("tbd", serialized)
+        self.assertNotIn("topic pending", serialized)
+        self.assertTrue(all("chatgpt" not in item.course_title.lower() for item in catalog.lessons))
+
+
+class DatabaseTests(unittest.TestCase):
+    def test_sqlite_development_url(self):
+        parsed = parse_database_url("sqlite:///./local.db")
+        self.assertEqual(parsed.backend, "sqlite")
+        self.assertEqual(parsed.sqlite_path, "./local.db")
+
+    def test_postgresql_urls_are_not_downgraded_to_sqlite(self):
+        self.assertEqual(parse_database_url("postgresql://u:p@db/app").backend, "postgresql")
+        parsed = parse_database_url("postgresql+psycopg://u:p@db/app")
+        self.assertEqual(parsed.backend, "postgresql")
+        self.assertTrue(parsed.url.startswith("postgresql://"))
+
+    def test_unknown_database_scheme_fails_fast(self):
+        with self.assertRaises(UnsupportedDatabaseURL):
+            parse_database_url("mysql://db/app")
+
+    def test_legacy_topic_storage_still_works_on_sqlite_adapter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(f"sqlite:///{Path(tmp) / 'legacy.db'}")
+            with patch.object(legacy_db, "database", db):
+                legacy_db.init_db()
+                legacy_db.save_published_topic("Тестовая тема", category="ai", keywords=("курс",))
+                self.assertEqual(legacy_db.get_published_topics(), ["Тестовая тема"])
+
+    def test_publication_claim_is_idempotent_and_failed_is_retryable(self):
+        lesson = load_curriculum(CURRICULUM).lessons[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(f"sqlite:///{Path(tmp) / 'course.db'}")
+            with patch.object(repository, "database", db):
+                self.assertEqual(repository.claim_publication(lesson, PartType.EXPLAIN, "telegram", "time"), 1)
+                self.assertEqual(repository.claim_publication(lesson, PartType.EXPLAIN, "telegram", "time"), 0)
+                repository.finish_publication(lesson, PartType.EXPLAIN, "telegram", status="failed", error="x")
+                self.assertEqual(repository.claim_publication(lesson, PartType.EXPLAIN, "telegram", "time"), 2)
+                repository.finish_publication(lesson, PartType.EXPLAIN, "telegram", status="published", external_id="1")
+                self.assertEqual(repository.claim_publication(lesson, PartType.EXPLAIN, "telegram", "time"), 0)
+
+    def test_stale_publication_claim_is_recovered_after_restart(self):
+        lesson = load_curriculum(CURRICULUM).lessons[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(f"sqlite:///{Path(tmp) / 'course.db'}")
+            with patch.object(repository, "database", db):
+                self.assertTrue(repository.claim_publication(lesson, PartType.EXPLAIN, "telegram", "time"))
+                with db.connect() as conn:
+                    conn.execute("UPDATE platform_publications SET updated_at='2000-01-01 00:00:00'")
+                self.assertEqual(repository.recover_stale_work(30)[0], 1)
+                self.assertTrue(repository.claim_publication(lesson, PartType.EXPLAIN, "telegram", "time"))
+
+    def test_needs_review_is_not_automatically_regenerated(self):
+        lesson = load_curriculum(CURRICULUM).lessons[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(f"sqlite:///{Path(tmp) / 'course.db'}")
+            with patch.object(repository, "database", db):
+                repository.save_generation_failure(lesson, "quality exhausted", "needs_review")
+                self.assertFalse(repository.claim_generation(lesson))
+                self.assertEqual(repository.generation_status(lesson), "needs_review")
+
+    def test_generated_parts_sources_and_cover_artifact_persist(self):
+        lesson = load_curriculum(CURRICULUM).lessons[0]
+        parts = tuple(CoursePart(kind, kind.public_name, f"text-{kind.value}") for kind in PartType)
+        generated = GeneratedLesson(lesson, parts, "test/model", (lesson.sources[0].url,))
+        source = RetrievedSource(lesson.sources[0], "official source text", "source-hash")
+        artifacts = {
+            kind: (f"course-cover://{kind.value}", f"hash-{kind.value}", f"png-{kind.value}".encode())
+            for kind in PartType
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(f"sqlite:///{Path(tmp) / 'course.db'}")
+            with patch.object(repository, "database", db):
+                repository.save_generated_lesson(generated, (source,), artifacts)
+                stored = repository.load_part(lesson, PartType.TRY)
+                self.assertEqual(stored.text, "text-try")
+                self.assertEqual(stored.image_bytes, b"png-try")
+                with db.connect() as conn:
+                    snapshot = conn.execute("SELECT source_url, content_hash FROM source_snapshots").fetchone()
+                self.assertEqual(snapshot, (lesson.sources[0].url, "source-hash"))
+
+    def test_special_day_state_and_idempotency_use_stable_special_key(self):
+        special = load_curriculum_catalog(CURRICULUM_DIR).special_day_for_date(date(2026, 10, 31))
+        parts = tuple(CoursePart(kind, kind.public_name, f"special-{kind.value}") for kind in PartType)
+        generated = GeneratedLesson(special, parts, "test/model", (special.sources[0].url,))
+        source = RetrievedSource(special.sources[0], "official special material", "special-source-hash")
+        artifacts = {
+            kind: (f"course-cover://special/{kind.value}", f"special-{kind.value}", b"image")
+            for kind in PartType
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(f"sqlite:///{Path(tmp) / 'special.db'}")
+            with patch.object(repository, "database", db):
+                repository.save_generated_lesson(generated, (source,), artifacts)
+                self.assertEqual(repository.load_part(special, PartType.REINFORCE).text, "special-reinforce")
+                self.assertEqual(repository.claim_publication(
+                    special, PartType.REINFORCE, "telegram", "scheduled"
+                ), 1)
+                self.assertEqual(repository.claim_publication(
+                    special, PartType.REINFORCE, "telegram", "scheduled"
+                ), 0)
+                self.assertIn("special-2026-10-31", repository.publication_key(
+                    special, PartType.REINFORCE, "telegram"
+                ))
+
+
+class QualityAndGenerationTests(unittest.TestCase):
+    def test_length_limits_and_coherence(self):
+        parts = (
+            CoursePart(PartType.EXPLAIN, "РАЗБИРАЕМ", _fitted("Объясняем языковую модель.", "Выберите пример.", 900, "Вероятное продолжение строится из элементов учебного материала. ")),
+            CoursePart(PartType.TRY, "ПРОБУЕМ", _fitted("Практика с языковой моделью.", "Попробуйте запрос.", 750, "Измените начальную фразу и внимательно сравните полученные варианты. ")),
+            CoursePart(PartType.REINFORCE, "ЗАКРЕПЛЯЕМ", _fitted("Закрепляем языковую модель.", "Напишите результат в комментариях.", 550, "Отметьте уверенную формулировку и оцените необходимость проверки. ")),
+        )
+        validate_parts(parts)
+
+    def test_over_limit_is_rejected(self):
+        parts = tuple(CoursePart(kind, kind.public_name, "x" * 1200) for kind in PartType)
+        with self.assertRaises(LessonQualityError):
+            validate_parts(parts)
+
+    def test_repeated_comments_cta_is_rejected(self):
+        parts = (
+            CoursePart(PartType.EXPLAIN, "РАЗБИРАЕМ", _fitted("Объясняем контекст модели.", "Выберите пример.", 900, "Исходные сведения направляют содержание и делают результат конкретнее. ")),
+            CoursePart(PartType.TRY, "ПРОБУЕМ", _fitted("Проверяем контекст модели.", "Попробуйте запрос.", 750, "Добавьте аудиторию и обстоятельства, а затем оцените полученный вариант. ")),
+            CoursePart(PartType.REINFORCE, "ЗАКРЕПЛЯЕМ", _fitted("Закрепляем контекст модели.", "Напишите результат в комментариях.", 550, "Отметьте полезную деталь и сформулируйте собственный итог работы. ")),
+        )
+        with self.assertRaisesRegex(LessonQualityError, "CTA repeats"):
+            validate_parts(parts, (parts[-1].text,))
+
+    def test_lesson_generation_uses_one_json_for_three_parts(self):
+        lesson = load_curriculum(CURRICULUM).lessons[0]
+        source = RetrievedSource(lesson.sources[0], "официальный материал " * 30, "hash")
+        payload = {
+            "explain": _fitted("Генеративный интеллект создаёт ответ.", "Выберите пример.", 980, "Модель соединяет изученные закономерности и формирует новое продолжение. "),
+            "try": _fitted("Проверяем генеративный интеллект.", "Попробуйте сравнение.", 880, "Задайте одинаковую бытовую цель поиску и помощнику, затем сопоставьте выдачу. "),
+            "reinforce": _fitted("Закрепляем генеративный интеллект.", "Напишите вывод в комментариях.", 720, "Назовите найденное отличие и объясните, какой результат требует проверки. "),
+        }
+        client = CourseAIClient("test/model", "")
+        with patch.object(client, "complete", return_value=(json.dumps(payload, ensure_ascii=False), "test/model")) as call:
+            generated = _generate_sync(lesson, (source,), client)
+        self.assertEqual(len(generated.parts), 3)
+        self.assertEqual(call.call_count, 1)
+        self.assertEqual(generated.used_sources, (lesson.sources[0].url,))
+
+    def test_special_day_generation_uses_special_context_and_three_parts(self):
+        special = load_curriculum_catalog(CURRICULUM_DIR).special_day_for_date(date(2026, 12, 31))
+        source = RetrievedSource(special.sources[0], "официальный итоговый материал " * 30, "hash")
+        payload = {
+            "explain": _fitted("Подводим итоги навыкам искусственного интеллекта.", "Выберите пример.", 900, "Программа связывает проверку создание и безопасное применение изученных подходов. "),
+            "try": _fitted("Создаём карту навыков искусственного интеллекта.", "Составьте результат.", 750, "Отметьте освоенные действия и выберите понятное продолжение образовательной программы. "),
+            "reinforce": _fitted("Закрепляем карту навыков искусственного интеллекта.", "Напишите самый полезный курс в комментариях.", 550, "Предложите тему для продолжения и назовите практический результат этого года. "),
+        }
+        client = CourseAIClient("test/model", "")
+        with patch.object(client, "complete", return_value=(json.dumps(payload, ensure_ascii=False), "test/model")) as call:
+            generated = _generate_sync(special, (source,), client)
+        self.assertEqual(len(generated.parts), 3)
+        prompt = call.call_args.args[0]
+        self.assertIn("ИТОГИ ГОДА", prompt)
+        self.assertNotIn("Урок: 0 из 0", prompt)
+
+
+class SourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_source_retrieval_is_mockable(self):
+        lesson = load_curriculum(CURRICULUM).lessons[0]
+        retriever = SourceRetriever()
+        item = RetrievedSource(lesson.sources[0], "материал " * 40, "hash")
+        with patch.object(retriever, "_fetch", return_value=item):
+            self.assertEqual(await retriever.retrieve(lesson), (item,))
+
+    async def test_required_source_failure_stops_blind_generation(self):
+        lesson = load_curriculum(CURRICULUM).lessons[0]
+        retriever = SourceRetriever()
+        with patch.object(retriever, "_fetch", side_effect=RuntimeError("offline")):
+            with self.assertRaises(SourceRetrievalError):
+                await retriever.retrieve(lesson)
+
+    async def test_optional_source_failure_does_not_block_required_source(self):
+        lesson = load_curriculum(CURRICULUM).lessons[0]
+        required = lesson.sources[0]
+        optional = Source("Optional", "https://example.com/optional", required=False)
+        lesson = replace(lesson, sources=(required, optional))
+        retrieved = RetrievedSource(required, "материал " * 40, "hash")
+        retriever = SourceRetriever()
+
+        def fetch(source):
+            if source.required:
+                return retrieved
+            raise RuntimeError("optional offline")
+
+        with patch.object(retriever, "_fetch", side_effect=fetch):
+            self.assertEqual(await retriever.retrieve(lesson), (retrieved,))
+
+
+class CoverTests(unittest.TestCase):
+    def test_cover_is_square_deterministic_and_uses_safe_margin(self):
+        lesson = load_curriculum(CURRICULUM).lessons[0]
+        first, first_hash = render_cover(lesson, PartType.EXPLAIN, "missing-base.png")
+        second, second_hash = render_cover(lesson, PartType.EXPLAIN, "missing-base.png")
+        with Image.open(__import__("io").BytesIO(first)) as image:
+            self.assertEqual(image.size, (SIZE, SIZE))
+        self.assertEqual(first_hash, second_hash)
+        self.assertEqual(first, second)
+        self.assertGreaterEqual(SAFE_MARGIN, 80)
+
+    def test_every_curriculum_title_fits_every_part_cover(self):
+        for lesson in load_curriculum_catalog(CURRICULUM_DIR).days:
+            for part_type in PartType:
+                layout = cover_layout(lesson, part_type)
+                self.assertTrue(layout.text_within_safe_area)
+                self.assertLessEqual(len(layout.title_lines), 3)
+
+    def test_special_cover_has_no_fake_lesson_16_of_15(self):
+        special = load_curriculum_catalog(CURRICULUM_DIR).special_day_for_date(date(2026, 8, 29))
+        metadata = " ".join(cover_metadata(special))
+        self.assertIn("СПЕЦИАЛЬНЫЙ УРОК", metadata)
+        self.assertNotIn("УРОК 16", metadata)
+        self.assertNotIn("ИЗ 15", metadata)
+
+
+class SchedulerAndReconciliationTests(unittest.TestCase):
+    def test_course_ai_models_remain_paid_gemini_pair(self):
+        self.assertEqual(COURSE_AI_MODEL, "google/gemini-2.5-flash-lite")
+        self.assertEqual(COURSE_AI_FALLBACK_MODEL, "google/gemini-2.5-flash")
+
+    def test_scheduler_has_three_moscow_jobs_and_unchanged_marketcode_job(self):
+        target = AsyncIOScheduler(timezone="Europe/Moscow")
+        settings = MarketCodeSettings(True, "12:00", "Europe/Moscow", "cover", "plan", "m", "f")
+        with patch("app.scheduler.load_settings", return_value=settings):
+            configure_scheduler(target)
+        jobs = {job.id: job for job in target.get_jobs()}
+        for job_id, hour in (("publish_course_explain", 9), ("publish_course_try", 15), ("publish_course_reinforce", 20)):
+            self.assertIn(job_id, jobs)
+            self.assertIn(f"hour='{hour}'", str(jobs[job_id].trigger))
+            self.assertEqual(str(jobs[job_id].trigger.timezone), "Europe/Moscow")
+        self.assertIn("publish_marketcode_article", jobs)
+        self.assertIn("hour='12'", str(jobs["publish_marketcode_article"].trigger))
+        self.assertNotIn("publish_post", jobs)
+
+    def test_reconciliation_catches_only_latest_reasonable_part(self):
+        tz = ZoneInfo("Europe/Moscow")
+        decision = decide_reconciliation(datetime(2026, 8, 14, 16, 0, tzinfo=tz), 90)
+        self.assertEqual(decision.publish, PartType.TRY)
+        self.assertEqual(decision.missed, (PartType.EXPLAIN,))
+
+    def test_reconciliation_marks_old_parts_missed(self):
+        tz = ZoneInfo("Europe/Moscow")
+        decision = decide_reconciliation(datetime(2026, 8, 14, 22, 0, tzinfo=tz), 90)
+        self.assertIsNone(decision.publish)
+        self.assertEqual(decision.missed, tuple(PartType))
+
+
+class PublisherContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_telegram_cover_and_whole_text_in_one_message(self):
+        text = "цельная учебная часть"
+        with patch(
+            "app.course.service.send_photo_with_caption", new=AsyncMock(return_value="10")
+        ) as photo:
+            result = await _telegram(text, b"image")
+        from app.course.service import TELEGRAM_CHANNEL_ID
+
+        photo.assert_awaited_once_with(TELEGRAM_CHANNEL_ID, b"image", text)
+        self.assertEqual(result, "10")
+
+    async def test_platform_calls_are_compatible_and_vk_is_text_only(self):
+        lesson = load_curriculum(CURRICULUM).lessons[0]
+        with (
+            patch("app.course.service.publish_to_max", new=AsyncMock(return_value="m")) as max_call,
+            patch("app.course.service.publish_to_vk", new=AsyncMock(return_value="v")) as vk_call,
+            patch("app.course.service.publish_draft", new=AsyncMock(return_value="published")) as dzen_call,
+        ):
+            await _publish_platform("max", lesson, PartType.EXPLAIN, "title", "text", b"image")
+            await _publish_platform("vk", lesson, PartType.EXPLAIN, "title", "text", b"image")
+            await _publish_platform("dzen", lesson, PartType.EXPLAIN, "title", "text", b"image")
+        max_call.assert_awaited_once_with(text="text", image_bytes=b"image")
+        vk_call.assert_awaited_once_with(text="text", image_bytes=None)
+        dzen_call.assert_awaited_once_with(title=f"РАЗБИРАЕМ: {lesson.topic}", text="text", image_bytes=b"image")
+
+    async def test_one_platform_failure_does_not_define_other_fake_operations(self):
+        operations = [AsyncMock(side_effect=RuntimeError("telegram")), AsyncMock(return_value="max"), AsyncMock(return_value="vk")]
+        results = []
+        for operation in operations:
+            try:
+                results.append(await operation())
+            except RuntimeError:
+                results.append("failed")
+        self.assertEqual(results, ["failed", "max", "vk"])
+
+    async def test_real_course_orchestrator_continues_after_platform_failure(self):
+        lesson = load_curriculum(CURRICULUM).lessons[0]
+        part = StoredPart(
+            lesson.season_id, lesson.course_id, lesson.lesson_id, lesson.date,
+            PartType.EXPLAIN, "РАЗБИРАЕМ", "цельный текст", "course-cover://test", "hash", b"image",
+        )
+        platform_result = AsyncMock(side_effect=[RuntimeError("telegram failed"), "max-id", "vk-id", "published"])
+        with (
+            patch("app.course.service.curriculum") as plan,
+            patch("app.course.service.prepare_lesson", new=AsyncMock(return_value=True)),
+            patch("app.course.service.load_part", return_value=part),
+            patch("app.course.service.hashlib.sha256") as sha,
+            patch("app.course.service.claim_publication", return_value=True),
+            patch("app.course.service._publish_platform", platform_result),
+            patch("app.course.service.finish_publication") as finish,
+            patch("app.course.service.publication_statuses", return_value={
+                "telegram": "failed", "max": "published", "vk": "published", "dzen": "published"
+            }),
+        ):
+            plan.return_value.day_for_date.return_value = lesson
+            sha.return_value.hexdigest.return_value = "hash"
+            await publish_lesson_part(PartType.EXPLAIN, target_date=lesson.date)
+        self.assertEqual(platform_result.await_count, 4)
+        self.assertEqual(finish.call_count, 4)
+        self.assertEqual(finish.call_args_list[0].kwargs["status"], "failed")
+        self.assertTrue(all(call.kwargs["status"] == "published" for call in finish.call_args_list[1:]))
+
+    async def test_special_day_uses_same_publication_orchestrator(self):
+        special = load_curriculum_catalog(CURRICULUM_DIR).special_day_for_date(date(2026, 8, 31))
+        part = StoredPart(
+            special.season_id, special.course_id, special.lesson_id, special.date,
+            PartType.EXPLAIN, "РАЗБИРАЕМ", "итоговый текст", "course-cover://special", "hash", b"image",
+        )
+        with (
+            patch("app.course.service.curriculum") as plan,
+            patch("app.course.service.prepare_lesson", new=AsyncMock(return_value=True)) as prepare,
+            patch("app.course.service.load_part", return_value=part),
+            patch("app.course.service.hashlib.sha256") as sha,
+            patch("app.course.service.claim_publication", side_effect=[1, 1, 1, 1]),
+            patch("app.course.service._publish_platform", new=AsyncMock(return_value="published")) as publish,
+            patch("app.course.service.finish_publication"),
+        ):
+            plan.return_value.day_for_date.return_value = special
+            sha.return_value.hexdigest.return_value = "hash"
+            await publish_lesson_part(PartType.EXPLAIN, target_date=special.date)
+        prepare.assert_awaited_once_with(special)
+        self.assertEqual(publish.await_count, 4)
+
+    def test_course_flow_does_not_import_legacy_image_search(self):
+        import inspect
+        import app.course.service as service
+        self.assertNotIn("app.images", inspect.getsource(service))
+        self.assertNotIn("fetch_image", inspect.getsource(service))
+
+
+if __name__ == "__main__":
+    unittest.main()

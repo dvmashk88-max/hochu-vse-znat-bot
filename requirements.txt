@@ -7,3 +7,6 @@ certifi
 apscheduler
 python-dotenv
 playwright
+PyYAML
+Pillow
+psycopg[binary]

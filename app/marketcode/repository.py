@@ -1,27 +1,17 @@
 from __future__ import annotations
 
 import json
-import re
-import sqlite3
-
-from app.config import DATABASE_URL
+from app.database import database
 
 
-def _db_path() -> str:
-    match = re.match(r"sqlite:///(.+)", DATABASE_URL)
-    return match.group(1) if match else "bot.db"
-
-
-def _connect() -> sqlite3.Connection:
-    return sqlite3.connect(_db_path())
-
-
-def init_marketcode_storage() -> None:
-    with _connect() as conn:
+def init_marketcode_storage(target_database=None) -> None:
+    target = target_database or database
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if target.config.backend == "sqlite" else "BIGSERIAL PRIMARY KEY"
+    with target.connect() as conn:
         conn.execute(
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS marketcode_publications (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id {pk},
                 plan_day INTEGER NOT NULL UNIQUE,
                 topic TEXT NOT NULL,
                 category TEXT NOT NULL,
@@ -33,12 +23,11 @@ def init_marketcode_storage() -> None:
             )
             """
         )
-        conn.commit()
 
 
 def published_days() -> set[int]:
     init_marketcode_storage()
-    with _connect() as conn:
+    with database.connect() as conn:
         rows = conn.execute(
             "SELECT plan_day FROM marketcode_publications WHERE status IN ('published', 'partial')"
         ).fetchall()
@@ -57,7 +46,7 @@ def save_publication(
     init_marketcode_storage()
     successful = sum(value.startswith("published") for value in channel_statuses.values())
     status = "published" if successful == len(channel_statuses) else "partial" if successful else "failed"
-    with _connect() as conn:
+    with database.connect() as conn:
         conn.execute(
             """
             INSERT INTO marketcode_publications
@@ -82,4 +71,3 @@ def save_publication(
                 json.dumps(channel_statuses, ensure_ascii=False),
             ),
         )
-        conn.commit()

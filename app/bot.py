@@ -15,21 +15,24 @@ _bot = Bot(token=TELEGRAM_BOT_TOKEN)
 _CAPTION_LIMIT = 1024
 
 
-async def send_text(chat_id: str, text: str) -> None:
-    await _bot.send_message(chat_id=chat_id, text=text)
+async def send_text(chat_id: str, text: str) -> str:
+    message = await _bot.send_message(chat_id=chat_id, text=text)
+    return str(message.message_id)
 
 
-async def send_photo_with_caption(chat_id: str, image_bytes: bytes, caption: str) -> None:
+async def send_photo_with_caption(chat_id: str, image_bytes: bytes, caption: str) -> str:
     if len(caption) <= _CAPTION_LIMIT:
-        await _bot.send_photo(
+        message = await _bot.send_photo(
             chat_id=chat_id,
             photo=InputFile(io.BytesIO(image_bytes), filename="image.jpg"),
             caption=caption,
         )
+        return str(message.message_id)
     else:
         # Photo first, full text as follow-up message
-        await _bot.send_photo(
+        photo_message = await _bot.send_photo(
             chat_id=chat_id,
             photo=InputFile(io.BytesIO(image_bytes), filename="image.jpg"),
         )
-        await _bot.send_message(chat_id=chat_id, text=caption)
+        text_message = await _bot.send_message(chat_id=chat_id, text=caption)
+        return f"{photo_message.message_id},{text_message.message_id}"

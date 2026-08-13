@@ -12,6 +12,7 @@ from app.marketcode import publisher as marketcode_publisher
 from app.marketcode import repository
 from app.marketcode import vk as marketcode_vk
 from app.marketcode.image import _download_image
+from app.database import Database
 
 
 class MarketCodeContentPlanTests(unittest.TestCase):
@@ -176,7 +177,7 @@ class MarketCodeRepositoryTests(unittest.TestCase):
     def test_failed_day_is_retryable_and_successful_retry_is_consumed(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "marketcode.db")
-            with patch("app.marketcode.repository._db_path", return_value=db_path):
+            with patch.object(repository, "database", Database(f"sqlite:///{db_path}")):
                 repository.save_publication(
                     plan_day=1,
                     topic="Тема",

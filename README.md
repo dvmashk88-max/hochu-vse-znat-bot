@@ -1,130 +1,184 @@
-# Хочу всё знать — Telegram-бот
+# Хочу всё знать — ИИ. Учимся каждый день
 
-Автоматическая генерация и публикация образовательного контента в Telegram-канал с помощью AI.
-Текст постов генерируется через [OpenRouter API](https://openrouter.ai), изображения — через Pexels и Pixabay.
+Production-oriented Python-сервис последовательных коротких курсов по искусственному интеллекту. Первый сезон начинается 14 августа 2026 года, первый курс — «ИИ без путаницы» — содержит 15 ежедневных уроков.
 
-**Требования:** Python 3.12+
+Каждый урок заранее генерируется как единое целое из трёх связанных частей:
+
+- `09:00` — **РАЗБИРАЕМ**;
+- `15:00` — **ПРОБУЕМ**;
+- `20:00` — **ЗАКРЕПЛЯЕМ**.
+
+Все часы основного курса работают в `Europe/Moscow`. Случайный legacy flow и интервал раз в 6 часов сохранены в коде для безопасной миграции, но больше не зарегистрированы в scheduler.
 
 ## Архитектура
 
-```
-app/
-  main.py           — FastAPI-приложение, точка входа
-  config.py         — переменные окружения
-  bot.py            — Telegram Bot API (отправка сообщений/фото)
-  generator.py      — генерация текста поста через LLM
-  images.py         — поиск и загрузка изображений (Pexels → Pixabay)
-  db.py             — хранение тем и истории публикаций
-  scheduler.py      — планировщик автопубликаций (APScheduler)
-  publisher.py      — оркестрация: тема → текст → фото → публикация
-  dzen_publisher.py — публикация в Дзен через Playwright
-  max_publisher.py  — публикация в MAX через Bot API
-  vk_publisher.py   — публикация в VK через VK API
-  topic_selector.py — выбор следующей незатронутой темы
-
-prompts/
-  post_prompt.txt   — промпт для генерации поста
-  style_prompt.txt  — промпт для стилизации текста
+```text
+curriculum/season_01.yaml … season_05.yaml
+    ↓
+curriculum validator + date resolver
+    ↓
+HTTP SourceRetriever (официальные источники)
+    ↓
+Course AI через OpenRouter
+    ↓
+quality validation трёх связанных частей
+    ↓
+SQLite/PostgreSQL persistent state
+    ↓
+09:00 / 15:00 / 20:00 cron jobs
+    ↓
+Telegram | MAX | VK text-only | существующий Dzen Playwright adapter
 ```
 
-## Быстрый старт
+Основные course-модули находятся в `app/course/`:
+
+- `curriculum.py` — строгий YAML parser и fail-fast validation;
+- `sources.py` — простой mock-friendly HTTP retrieval без embeddings;
+- `generator.py` — отдельный платный Course AI flow;
+- `quality.py` — лимиты, связность, действия и CTA;
+- `covers.py` — локальные детерминированные квадратные обложки Pillow;
+- `repository.py` — lesson/part/source/platform state и idempotency;
+- `service.py` — подготовка и независимая публикация платформ;
+- `reconciliation.py` — restart/catch-up policy.
+
+## Curriculum
+
+Versioned curriculum хранится в каталоге `curriculum/` как пять файлов `season_01.yaml` — `season_05.yaml`. Он полностью покрывает каждый календарный день с 14 августа по 31 декабря 2026 года: 135 обычных уроков и 5 специальных дней. Scheduler никогда не выбирает тему случайно и определяет учебный день по текущей московской дате.
+
+При startup загружается весь каталог. Ошибкой считаются повторные season/course/lesson/special IDs, повторные даты, календарные дыры, пропуски внутри курса, выход урока за boundaries, пустые цели или отсутствие sources.
+
+Программа до конца 2026 года:
+
+| Сезон | Курсы | Даты | Special days |
+|---|---|---|---|
+| 1 — август | 1. «ИИ без путаницы» | 14–28 августа | 29 и 30 августа — повторение; 31 августа — итоги сезона |
+| 2 — сентябрь | 2. «Промпты с нуля»; 3. «Промпты на практике» | 1–15 и 16–30 сентября | нет |
+| 3 — октябрь | 4. «Поиск и проверка информации с ИИ»; 5. «Документы, тексты и данные» | 1–15 и 16–30 октября | 31 октября — итоги сезона |
+| 4 — ноябрь | 6. «ИИ для работы и продуктивности»; 7. «ИИ для бизнеса» | 1–15 и 16–30 ноября | нет |
+| 5 — декабрь | 8. «Создание контента с ИИ»; 9. «Автоматизация и AI-агенты с нуля» | 1–15 и 16–30 декабря | 31 декабря — итоги года |
+
+Special day — отдельный тип, а не шестнадцатый урок. Он имеет собственные тему, цели, sources и cover label, но проходит через те же retrieval, генерацию трёх частей, quality check, state, idempotency, reconciliation и publishers.
+
+Организационная отметка: 25 декабря 2026 года запланирован редакционный пересмотр концепции и составление curriculum на 2027 год. Внешнее календарное событие кодом не создаётся.
+
+## Подготовка и recovery
+
+Job `prepare_course_days` в `00:10 Europe/Moscow` готовит окно `today … today+3`, то есть до четырёх curriculum days, включая special days. Та же подготовка ставится one-shot при startup. Уже generated artifact не меняется, а `needs_review` не запускает бесконечную регенерацию. Если artifact отсутствует в момент cron, сохраняется idempotent lazy prepare.
+
+`reconcile_course_publications` выполняется при startup и каждые 10 минут:
+
+- рассматривает только сегодняшнюю дату;
+- выбирает только последнюю наступившую часть;
+- разрешает catch-up не позднее `COURSE_CATCHUP_MINUTES`;
+- более ранние наступившие части фиксирует как `missed` и не публикует пачкой;
+- опубликованные `lesson + part + platform` пропускаются.
+
+## Database
+
+Поддерживаются:
+
+- `sqlite:///...` — local development/tests;
+- `postgresql://...`, `postgres://...`, `postgresql+...` — PostgreSQL через `psycopg`.
+
+Неизвестная scheme вызывает fail-fast. PostgreSQL URL больше не может молча превратиться в локальный `bot.db`.
+
+Новые таблицы:
+
+- `course_lessons`;
+- `lesson_parts`;
+- `platform_publications`;
+- `source_snapshots`.
+
+Уникальный publication key включает season, course, lesson, part и platform. Успешная платформа не вызывается повторно; `failed` допускает отдельную повторную попытку. Таблица `admin_alerts` хранит stable alert keys и не позволяет reconciliation отправлять один и тот же alert повторно.
+
+Перед production требуется подключить Railway PostgreSQL и передать его URL через `DATABASE_URL`. Локальный SQLite не является production-safe state.
+
+## Course AI и sources
+
+Default models через OpenRouter:
+
+- `google/gemini-2.5-flash-lite`;
+- fallback `google/gemini-2.5-flash`.
+
+Course generator не использует бесплатный legacy cascade. Каждый урок grounded в source material из официальных URL curriculum. Если required source недоступен, слепая генерация запрещена. Реально использованные тексты и hashes сохраняются в `source_snapshots`.
+
+## Обложки
+
+Course flow не вызывает Pexels/Pixabay. Pillow создаёт отдельный JPEG `1080×1080` для каждой части. В renderer встроены пять законченных production-тем: орбиты основ, prompt-сигналы, поисковая data-grid, рабочие workflow и агентные circuits. Для сезона можно добавить override `assets/course/season_NN_base.png`, но без него используется полноценная сезонная композиция, а не технический placeholder. Все текстовые bounds валидируются внутри safe area. Обычная обложка показывает `УРОК N ИЗ 15`, special cover — `СПЕЦИАЛЬНЫЙ УРОК`, `ИТОГИ СЕЗОНА` или `ИТОГИ ГОДА`.
+
+## Admin alerts и readiness
+
+При включённых `COURSE_ALERTS_ENABLED` и `ADMIN_TELEGRAM_CHAT_ID` существующий Telegram bot уведомляет владельца о required-source failure, `needs_review`, полном отказе всех платформ, критической ошибке course DB и startup/curriculum failure. Stable alert key сохраняется в PostgreSQL/SQLite; одиночные ошибки платформ не создают spam.
+
+Если alerts выключены или chat ID отсутствует, приложение продолжает работу и пишет один warning. Секреты в alert и startup summary не выводятся.
+
+`GET /health` возвращает безопасные флаги `curriculum_loaded`, `database_ready` и `scheduler_started`. При startup логируется сводка curriculum, backend, schedule, platforms и MarketCode без URL БД, tokens или Dzen storage state.
+
+## SQLite → PostgreSQL
+
+Перед production switch необходимо сохранить MarketCode progress. Утилита `app.migrations.sqlite_to_postgres` открывает source `bot.db` read-only и переносит только `marketcode_publications`. Dry-run ничего не создаёт и не записывает:
 
 ```bash
-# 1. Установить зависимости
+python -m app.migrations.sqlite_to_postgres --source bot.db --target-url "$DATABASE_URL" --dry-run
+python -m app.migrations.sqlite_to_postgres --source bot.db --target-url "$DATABASE_URL" --execute
+```
+
+Повторный execute идемпотентен по `plan_day`. Старые random-topic/image/platform histories остаются архивом в SQLite: новый scheduler их не читает. Course state перед первым launch отсутствует и не выдумывается. Подробнее: `app/migrations/README.md`.
+
+## Platforms
+
+- Telegram: cover и весь текст одним photo-caption сообщением (курс ограничивает текст 1000 символами, то есть оставляет запас до caption limit); message ID сохраняется.
+- MAX: существующий image + text API flow.
+- VK: text-only для course flow; Photos API в этой миграции не меняется.
+- Dzen: используется существующий production Playwright publisher без переписывания selectors/authorization flow.
+
+Ошибка одной платформы не блокирует остальные. Результат каждой сохраняется отдельно.
+
+## MarketCode
+
+MarketCode остаётся отдельным ежедневным job `publish_marketcode_article` со своими env, content plan, Gemini generation, branded cover, CTA, text-only VK и platform isolation. Его генератор и Playwright flow в course migration не переписывались.
+
+## Запуск
+
+```bash
 python3.12 -m pip install -r requirements.txt
-
-# 2. Создать .env из примера
-cp .env.example .env
-
-# 3. Запустить
 python3.12 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-## Тестовая публикация вручную
+Health endpoints:
 
-```bash
-python3.12 -c "import asyncio; from app.publisher import publish_next_post; asyncio.run(publish_next_post())"
-```
-
-## Переменные окружения
-
-| Переменная | Описание |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | Токен бота от @BotFather |
-| `TELEGRAM_CHANNEL_ID` | ID или @username канала |
-| `OPENROUTER_API_KEY` | Ключ OpenRouter API (openrouter.ai) |
-| `PEXELS_API_KEY` | Ключ Pexels API для основного поиска изображений |
-| `PIXABAY_API_KEY` | Ключ Pixabay API для резервного поиска изображений |
-| `DATABASE_URL` | URL базы данных (по умолчанию SQLite) |
-| `POST_INTERVAL_HOURS` | Интервал публикаций в часах (по умолчанию 6) |
-| `DZEN_CHANNEL_URL` | URL канала Дзена |
-| `DZEN_STORAGE_STATE_JSON` | JSON-содержимое Playwright storage state для авторизации в Дзене |
-| `DZEN_AUTO_PUBLISH` | Автопубликация статей в Дзен (`false` по умолчанию) |
-| `DZEN_DEBUG_SCREENSHOTS` | Сохранять debug-скриншоты Дзена при публикации (`true` по умолчанию) |
-| `DZEN_DEBUG_DIR` | Папка для debug-скриншотов Дзена (`storage/dzen_debug` по умолчанию) |
-| `MAX_BOT_TOKEN` | Токен бота MAX |
-| `MAX_CHANNEL_ID` | Числовой ID канала MAX |
-| `VK_ACCESS_TOKEN` | Access token сообщества VK с правами `wall` и `photos` |
-| `VK_GROUP_ID` | Числовой ID сообщества VK без минуса |
-
-## Деплой на Railway
-
-Проект готов к деплою через [Railway](https://railway.app). Конфигурация в `railway.json`, версия Python задана в `runtime.txt`.
-
-1. Создать новый проект на Railway
-2. Подключить репозиторий
-3. Добавить переменные окружения в настройках сервиса
-4. Railway установит зависимости и Chromium для Playwright через `buildCommand`
-5. Railway автоматически запустит `uvicorn app.main:app`
-
-## Дзен
-
-Дзен работает через Playwright: заполняет статью, создаёт черновик и при `DZEN_AUTO_PUBLISH=true` нажимает кнопки публикации.
-
-По умолчанию `DZEN_AUTO_PUBLISH=false`, поэтому Дзен только создаёт черновик. Чтобы включить автоматическую публикацию в Railway, задайте переменную окружения `DZEN_AUTO_PUBLISH=true`.
-
-Внимание: `DZEN_AUTO_PUBLISH=true` публикует статьи в Дзен автоматически.
-
-Для Railway нужно добавить переменную окружения `DZEN_STORAGE_STATE_JSON`. Её значение — содержимое файла `storage/dzen_cookies.json` одной строкой. Если эта переменная задана, бот использует её вместо локального файла cookies.
-
-Локально можно использовать файл `storage/dzen_cookies.json`. Если `DZEN_STORAGE_STATE_JSON` не задана, код попробует взять сессию из этого файла.
-
-```bash
-# 1. Установить зависимости (если ещё не установлены)
-python3.12 -m pip install -r requirements.txt
-
-# 2. Установить браузер Chromium для Playwright
-python3.12 -m playwright install chromium
-```
-
-Сессия хранится в `storage/dzen_cookies.json` (в `.gitignore`). Для Railway скопируйте всё содержимое этого файла в `DZEN_STORAGE_STATE_JSON` без переносов строк.
-
-## Health check
-
-```
-GET /  → {"status": "ok", "bot": "Хочу всё знать"}
+```text
+GET /       → {"status": "ok", "bot": "Хочу всё знать"}
 GET /health → {"status": "ok"}
 ```
 
-## MarketCode Pro SEO Content
+## Основные env
 
-MarketCode Pro реализован как отдельный, по умолчанию выключенный поток. Он не меняет темы,
-промпт, интервал и таблицы публикаций канала «Хочу всё знать».
+См. `.env.example`. Course-specific настройки:
 
-| Переменная | Назначение |
-|---|---|
-| `MARKETCODE_ENABLED` | Включает отдельный ежедневный job (`false` по умолчанию) |
-| `MARKETCODE_POST_TIME` | Время запуска в формате `HH:MM` (`12:00`) |
-| `MARKETCODE_TIMEZONE` | Часовой пояс расписания (`Europe/Moscow`) |
-| `MARKETCODE_IMAGE_URL` | URL или локальный путь одной постоянной фирменной обложки |
-| `MARKETCODE_CONTENT_PLAN` | Путь к контент-плану (`MARKETCODE_CONTENT_PLAN.md`) |
-| `MARKETCODE_OPENROUTER_MODEL` | Основная модель компактных SEO-статей |
-| `MARKETCODE_OPENROUTER_FALLBACK_MODEL` | Резервная модель при ошибке основной |
+- `COURSE_ENABLED`;
+- `COURSE_TIMEZONE`;
+- `COURSE_CURRICULUM_PATH`;
+- `COURSE_AI_MODEL`;
+- `COURSE_AI_FALLBACK_MODEL`;
+- `COURSE_SOURCE_TIMEOUT`;
+- `COURSE_CATCHUP_MINUTES`.
+- `COURSE_PREPARE_DAYS` (`3` означает сегодня плюс следующие три дня);
+- `COURSE_ALERTS_ENABLED`;
+- `ADMIN_TELEGRAM_CHAT_ID`.
 
-Контент-план находится в `MARKETCODE_CONTENT_PLAN.md`. Одна статья содержит примерно
-300–500 слов и не более 3800 символов. Текст без переписывания и разрезания отправляется
-в Telegram, MAX, VK и Дзен. В Telegram постоянная обложка отправляется отдельно, а следом
-идёт ровно одно сообщение с полной статьёй; остальные каналы получают обложку и тот же
-текст одним вызовом. Состояние потока хранится отдельно в таблице
-`marketcode_publications`. Публикация отменяется, если обязательная фирменная обложка
-недоступна.
+`POST_INTERVAL_HOURS` остаётся legacy-параметром и новым scheduler не используется.
+
+Полный Railway checklist и будущий порядок rollout описаны в `docs/production_rollout.md`.
+
+## Dzen operational note
+
+Существующий Playwright publisher не изменён. Если Dzen перестал создавать/публиковать статьи и лог сообщает об отсутствии авторизованной сессии, оператор вручную обновляет `DZEN_STORAGE_STATE_JSON`. Автоматический login не выполняется; startup summary показывает только `configured/not configured`.
+
+## Tests
+
+Все platform calls в тестах должны быть mocked. Запуск:
+
+```bash
+.venv/bin/python -m unittest discover -s tests
+```
