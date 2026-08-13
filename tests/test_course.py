@@ -4,7 +4,7 @@ import unittest
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -179,6 +179,34 @@ class DatabaseTests(unittest.TestCase):
                 self.assertFalse(repository.claim_generation(lesson))
                 self.assertEqual(repository.generation_status(lesson), "needs_review")
 
+    def test_controlled_needs_review_recovery_is_retryable_without_duplicates(self):
+        lesson = load_curriculum(CURRICULUM).lessons[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(f"sqlite:///{Path(tmp) / 'course.db'}")
+            with patch.object(repository, "database", db):
+                repository.save_generation_failure(lesson, "header encoding bug", "needs_review")
+                with db.connect(immediate=True) as conn:
+                    recovered = conn.execute(
+                        """UPDATE course_lessons SET generation_status='failed', error=NULL,
+                        updated_at=CURRENT_TIMESTAMP WHERE lesson_id=? AND lesson_date=?
+                        AND generation_status='needs_review'
+                        AND NOT EXISTS (
+                            SELECT 1 FROM lesson_parts WHERE lesson_parts.lesson_id=course_lessons.lesson_id
+                        ) AND NOT EXISTS (
+                            SELECT 1 FROM platform_publications
+                            WHERE platform_publications.lesson_id=course_lessons.lesson_id
+                        )""",
+                        (lesson.lesson_id, lesson.date.isoformat()),
+                    ).rowcount
+                self.assertEqual(recovered, 1)
+                self.assertEqual(repository.generation_status(lesson), "failed")
+                self.assertTrue(repository.claim_generation(lesson))
+                with db.connect() as conn:
+                    rows = conn.execute(
+                        "SELECT lesson_id FROM course_lessons WHERE lesson_id=?", (lesson.lesson_id,)
+                    ).fetchall()
+                self.assertEqual(rows, [(lesson.lesson_id,)])
+
     def test_generated_parts_sources_and_cover_artifact_persist(self):
         lesson = load_curriculum(CURRICULUM).lessons[0]
         parts = tuple(CoursePart(kind, kind.public_name, f"text-{kind.value}") for kind in PartType)
@@ -225,6 +253,54 @@ class DatabaseTests(unittest.TestCase):
 
 
 class QualityAndGenerationTests(unittest.TestCase):
+    def test_course_ai_headers_are_ascii_safe_and_primary_request_is_sent(self):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "choices": [{"finish_reason": "stop", "message": {"content": "result"}}]
+        }
+        client = CourseAIClient("primary/model", "fallback/model")
+
+        def post(_url, *, headers, json, timeout):
+            for name, value in headers.items():
+                name.encode("ascii")
+                value.encode("ascii")
+            self.assertEqual(headers["X-OpenRouter-Title"], "HochuVseZnat-AI")
+            self.assertNotIn("Хочу всё знать", " ".join(headers.values()))
+            self.assertEqual(json["model"], "primary/model")
+            self.assertEqual(timeout, 180)
+            return response
+
+        with (
+            patch("app.course.generator.OPENROUTER_API_KEY", "test-key"),
+            patch("app.course.generator.requests.post", side_effect=post) as request,
+        ):
+            content, model = client.complete("prompt")
+
+        self.assertEqual((content, model), ("result", "primary/model"))
+        self.assertEqual(client.models, ("primary/model", "fallback/model"))
+        request.assert_called_once()
+
+    def test_course_ai_fallback_remains_available(self):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "choices": [{"finish_reason": "stop", "message": {"content": "fallback result"}}]
+        }
+        client = CourseAIClient("primary/model", "fallback/model")
+        with (
+            patch("app.course.generator.OPENROUTER_API_KEY", "test-key"),
+            patch(
+                "app.course.generator.requests.post",
+                side_effect=(RuntimeError("primary unavailable"), response),
+            ) as request,
+        ):
+            content, model = client.complete("prompt")
+
+        self.assertEqual((content, model), ("fallback result", "fallback/model"))
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(request.call_args_list[1].kwargs["json"]["model"], "fallback/model")
+
     def test_length_limits_and_coherence(self):
         parts = (
             CoursePart(PartType.EXPLAIN, "РАЗБИРАЕМ", _fitted("Объясняем языковую модель.", "Выберите пример.", 900, "Вероятное продолжение строится из элементов учебного материала. ")),

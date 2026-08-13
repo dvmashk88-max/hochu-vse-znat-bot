@@ -38,7 +38,7 @@ class CourseAIClient:
                         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
                         "Content-Type": "application/json",
                         "HTTP-Referer": "https://t.me/hochu_vse_znat",
-                        "X-OpenRouter-Title": "Хочу всё знать — ИИ",
+                        "X-OpenRouter-Title": "HochuVseZnat-AI",
                     },
                     json={
                         "model": model,
