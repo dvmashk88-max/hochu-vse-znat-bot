@@ -54,6 +54,7 @@ class Lesson:
     explain_objective: str
     try_objective: str
     reinforce_objective: str
+    future_topics: tuple[str, ...] = ()
 
     @property
     def day_type(self) -> str:
@@ -76,6 +77,7 @@ class SpecialDay:
     explain_objective: str
     try_objective: str
     reinforce_objective: str
+    future_topics: tuple[str, ...] = ()
 
     @property
     def day_type(self) -> str:

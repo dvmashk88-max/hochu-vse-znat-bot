@@ -2,6 +2,8 @@
 
 Документ описывает будущий rollout. Никакие Railway/Git/production-операции этой документацией автоматически не выполняются.
 
+При первом будущем deploy новой редакционной версии course flow уже подготовленные, но ещё ни разу не публиковавшиеся части автоматически проверяются текущим quality pipeline. Старый короткий artifact переводится в `failed` и безопасно готовится заново. Если по уроку существует хотя бы одна publication operation, текст не переписывается: это сохраняет последовательность трёх частей и исключает дубли. Railway env `COURSE_AI_MODEL` необходимо явно заменить на `qwen/qwen3.5-flash-02-23`, иначе сохранённая переменная окружения перекроет новый default в коде.
+
 ## Railway environment
 
 | ENV | Required? | Existing likely? | New? | Default | Purpose | Secret? | Must set before first deploy? |
@@ -13,7 +15,7 @@
 | `COURSE_ENABLED` | Да | Нет | Да | `true` | Включение course jobs | Нет | Да, задать явно |
 | `COURSE_TIMEZONE` | Да | Нет | Да | `Europe/Moscow` | Curriculum и scheduler timezone | Нет | Да, задать явно |
 | `COURSE_CURRICULUM_PATH` | Да | Нет | Да | `curriculum` | Каталог season YAML | Нет | Нет при стандартном пути |
-| `COURSE_AI_MODEL` | Да | Нет | Да | `google/gemini-2.5-flash-lite` | Primary Course AI | Нет | Нет, но рекомендуется явно |
+| `COURSE_AI_MODEL` | Да | Нет | Да | `qwen/qwen3.5-flash-02-23` | Primary Course AI | Нет | Да: Railway env может сохранять старую Gemini |
 | `COURSE_AI_FALLBACK_MODEL` | Да | Нет | Да | `google/gemini-2.5-flash` | Course AI fallback | Нет | Нет, но рекомендуется явно |
 | `COURSE_SOURCE_TIMEOUT` | Нет | Нет | Да | `20` | HTTP source timeout | Нет | Нет |
 | `COURSE_CATCHUP_MINUTES` | Нет | Нет | Да | `90` | Restart catch-up window | Нет | Нет |

@@ -13,6 +13,13 @@ SIZE = 1080
 SAFE_MARGIN = 96
 TEXT_SAFE_MARGIN = 120
 MIN_TITLE_FONT = 38
+LESSON_ART_DIR = Path("assets/course/lesson_art")
+
+PART_ACCENTS = {
+    PartType.EXPLAIN: "#67F5D1",
+    PartType.TRY: "#68C7FF",
+    PartType.REINFORCE: "#B8A7FF",
+}
 
 FONT_CANDIDATES = {
     False: (
@@ -189,16 +196,92 @@ def _draw_motif(draw: ImageDraw.ImageDraw, season: int, theme: dict[str, object]
             draw.line((*left, *right), fill=glow, width=7)
 
 
+def lesson_art_path(day: CourseDay) -> Path:
+    return LESSON_ART_DIR / (
+        f"season_{day.season_number:02d}_lesson_{day.lesson_number:02d}.jpg"
+    )
+
+
+def _draw_illustrated_cover(image: Image.Image, day: CourseDay, part_type: PartType) -> Image.Image:
+    image = image.convert("RGBA")
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    accent = PART_ACCENTS[part_type]
+
+    # The illustration remains the hero; this quiet panel guarantees readable
+    # programmatic Cyrillic typography without baking text into generated art.
+    draw.rounded_rectangle(
+        (54, 54, 548, SIZE - 54),
+        radius=44,
+        fill=(5, 14, 37, 232),
+        outline=accent,
+        width=3,
+    )
+    draw.rounded_rectangle((84, 82, 518, 150), radius=24, fill=(12, 29, 61, 220))
+    draw.text((108, 101), "ХОЧУ ВСЁ ЗНАТЬ — ИИ", font=_font(27, True), fill="#FFFFFF")
+    draw.text((108, 164), "УЧИМСЯ КАЖДЫЙ ДЕНЬ", font=_font(20, True), fill=accent)
+
+    season_line, day_line = cover_metadata(day)
+    draw.text((108, 232), season_line, font=_font(20), fill="#B8C8E8")
+    draw.text((108, 272), day_line, font=_font(27, True), fill="#FFFFFF")
+
+    title_font_size = 48
+    title_lines = _wrap(draw, day.short_title.upper(), _font(title_font_size, True), 382)
+    while len(title_lines) > 3 and title_font_size > 38:
+        title_font_size -= 2
+        title_lines = _wrap(draw, day.short_title.upper(), _font(title_font_size, True), 382)
+    title_y = 365
+    for line in title_lines:
+        draw.text((108, title_y), line, font=_font(title_font_size, True), fill="#FFFFFF")
+        title_y += title_font_size + 17
+
+    draw.line((108, 570, 490, 570), fill=(103, 245, 209, 95), width=2)
+    draw.text((108, 600), "ТОКЕНЫ  •  КОНТЕКСТ", font=_font(20, True), fill="#CFE5FF")
+    draw.text((108, 634), "•  ВЕРОЯТНОСТЬ", font=_font(20, True), fill="#CFE5FF")
+
+    part_number = {
+        PartType.EXPLAIN: "ЧАСТЬ 1 ИЗ 3",
+        PartType.TRY: "ЧАСТЬ 2 ИЗ 3",
+        PartType.REINFORCE: "ЧАСТЬ 3 ИЗ 3",
+    }[part_type]
+    draw.text((108, 796), part_number, font=_font(20, True), fill="#B8C8E8")
+    draw.rounded_rectangle((88, 842, 514, 958), radius=32, fill=accent)
+    label = part_type.public_name
+    label_font = _font(32, True)
+    label_box = draw.textbbox((0, 0), label, font=label_font)
+    label_x = 301 - (label_box[2] - label_box[0]) / 2
+    label_y = 900 - (label_box[3] - label_box[1]) / 2 - label_box[1]
+    draw.text((label_x, label_y), label, font=label_font, fill="#08152F")
+
+    return Image.alpha_composite(image, overlay).convert("RGB")
+
+
 def render_cover(day: CourseDay, part_type: PartType,
                  base_path: str | Path | None = None) -> tuple[bytes, str]:
     theme = SEASON_THEMES.get(day.season_number)
     if not theme:
         raise ValueError(f"No production course theme for season {day.season_number}")
-    path = Path(base_path or f"assets/course/season_{day.season_number:02d}_base.png")
+    illustrated = False
+    if base_path is not None:
+        path = Path(base_path)
+    else:
+        candidate = lesson_art_path(day)
+        if candidate.exists():
+            path = candidate
+            illustrated = True
+        else:
+            path = Path(f"assets/course/season_{day.season_number:02d}_base.png")
     if path.exists():
         image = Image.open(path).convert("RGB").resize((SIZE, SIZE))
     else:
         image = _gradient(theme)
+
+    if illustrated:
+        image = _draw_illustrated_cover(image, day, part_type)
+        output = io.BytesIO()
+        image.save(output, format="JPEG", quality=90, optimize=True, progressive=False, subsampling=1)
+        content = output.getvalue()
+        return content, hashlib.sha256(content).hexdigest()
 
     draw = ImageDraw.Draw(image)
     draw.rounded_rectangle(

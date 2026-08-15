@@ -97,14 +97,16 @@ Job `prepare_course_days` в `00:10 Europe/Moscow` готовит окно `toda
 
 Default models через OpenRouter:
 
-- `google/gemini-2.5-flash-lite`;
+- `qwen/qwen3.5-flash-02-23`;
 - fallback `google/gemini-2.5-flash`.
 
 Course generator не использует бесплатный legacy cascade. Каждый урок grounded в source material из официальных URL curriculum. Если required source недоступен, слепая генерация запрещена. Реально использованные тексты и hashes сохраняются в `source_snapshots`.
 
+Каждая из трёх частей создаётся как законченная мини-статья с короткой зацепкой, развитием, конкретным примером или практикой, выводом и отдельным CTA в комментарии. Quality pipeline проверяет объём, 3–7 абзацев в зависимости от части, наличие примера в `РАЗБИРАЕМ`, явного действия в `ПРОБУЕМ`, финального CTA в каждой части, связность и отсутствие повторов. Лимиты: `1600–2200`, `1200–1700`, `900–1300` символов.
+
 ## Обложки
 
-Course flow не вызывает Pexels/Pixabay. Pillow создаёт отдельный JPEG `1080×1080` для каждой части. В renderer встроены пять законченных production-тем: орбиты основ, prompt-сигналы, поисковая data-grid, рабочие workflow и агентные circuits. Для сезона можно добавить override `assets/course/season_NN_base.png`, но без него используется полноценная сезонная композиция, а не технический placeholder. Все текстовые bounds валидируются внутри safe area. Обычная обложка показывает `УРОК N ИЗ 15`, special cover — `СПЕЦИАЛЬНЫЙ УРОК`, `ИТОГИ СЕЗОНА` или `ИТОГИ ГОДА`.
+Course flow не вызывает Pexels/Pixabay. Pillow создаёт отдельный JPEG `1080×1080` для каждой части. Для урока можно сохранить одну постоянную тематическую иллюстрацию `assets/course/lesson_art/season_NN_lesson_NN.jpg`; renderer повторно использует её для трёх частей, меняя только подпись и цветовой акцент. Без lesson art работают пять встроенных сезонных тем и optional override `assets/course/season_NN_base.png`. Все текстовые bounds валидируются внутри safe area. Обычная обложка показывает `УРОК N ИЗ 15`, special cover — `СПЕЦИАЛЬНЫЙ УРОК`, `ИТОГИ СЕЗОНА` или `ИТОГИ ГОДА`.
 
 ## Admin alerts и readiness
 
@@ -127,7 +129,7 @@ python -m app.migrations.sqlite_to_postgres --source bot.db --target-url "$DATAB
 
 ## Platforms
 
-- Telegram: cover и весь текст одним photo-caption сообщением (курс ограничивает текст 1000 символами, то есть оставляет запас до caption limit); message ID сохраняется.
+- Telegram: короткий материал помещается в photo-caption; новые полные части длиннее caption limit отправляются как обложка и следующее за ней цельное текстовое сообщение без обрезания. Оба message ID сохраняются одной publication operation.
 - MAX: существующий image + text API flow.
 - VK: text-only для course flow; Photos API в этой миграции не меняется.
 - Dzen: используется существующий production Playwright publisher без переписывания selectors/authorization flow.

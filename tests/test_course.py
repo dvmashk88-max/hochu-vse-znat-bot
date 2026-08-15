@@ -10,12 +10,21 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from PIL import Image
 
+from app import bot as bot_module
 from app.course import repository
-from app.course.covers import FONT_CANDIDATES, SAFE_MARGIN, SIZE, cover_layout, cover_metadata, render_cover
+from app.course.covers import (
+    FONT_CANDIDATES,
+    SAFE_MARGIN,
+    SIZE,
+    cover_layout,
+    cover_metadata,
+    lesson_art_path,
+    render_cover,
+)
 from app.course.curriculum import CurriculumError, load_curriculum, load_curriculum_catalog
 from app.course.generator import CourseAIClient, _generate_sync, _trim_complete_sentences
 from app.course.models import CoursePart, GeneratedLesson, PartType, RetrievedSource, Source
-from app.course.quality import LessonQualityError, validate_parts
+from app.course.quality import LIMITS, LessonQualityError, validate_parts
 from app.course.reconciliation import decide_reconciliation
 from app.course.repository import StoredPart
 from app.course.service import _publish_platform, _telegram, publish_lesson_part
@@ -33,10 +42,21 @@ CURRICULUM_DIR = ROOT / "curriculum"
 
 
 def _fitted(prefix: str, action: str, length: int, filler: str) -> str:
-    text = f"{prefix} {action} Контекст помогает выполнить задачу и проверить результат. "
-    while len(text) + len(filler) <= length - 2:
-        text += filler
-    return (text + "Итог.")[:length].rsplit(" ", 1)[0] + "."
+    if length >= LIMITS[PartType.EXPLAIN][0]:
+        cta = "Какой пример оказался самым понятным? Напишите в комментариях свой вариант."
+    elif length >= LIMITS[PartType.TRY][0]:
+        cta = "Что изменилось после упражнения? Расскажите в комментариях о наблюдении."
+    else:
+        cta = "Какой вывод вы сохраните? Поделитесь в комментариях своим правилом."
+    paragraphs = [
+        prefix,
+        f"{action} Например, бытовая ситуация помогает увидеть принцип без лишней теории. {filler}",
+        "Главное — связать наблюдение с целью урока и проверить результат на понятном случае.",
+        cta,
+    ]
+    while len("\n\n".join(paragraphs)) + len(filler) <= length:
+        paragraphs[1] += filler
+    return "\n\n".join(paragraphs)
 
 
 class CurriculumTests(unittest.TestCase):
@@ -254,20 +274,25 @@ class DatabaseTests(unittest.TestCase):
 
 class QualityAndGenerationTests(unittest.TestCase):
     def test_over_limit_text_is_trimmed_only_at_complete_sentence_boundaries(self):
-        sentences = [
+        sentences = " ".join(
             f"Предложение номер {index} содержит полезное пояснение для учебного материала и пример."
-            for index in range(1, 16)
-        ]
-        sentences.append("Напишите итог наблюдения в комментариях.")
-        text = " ".join(sentences)
+            for index in range(1, 28)
+        )
+        text = "\n\n".join((
+            "Короткая зацепка открывает тему.",
+            sentences,
+            "Главное предложение сохраняет естественный вывод материала.",
+            "Что вы заметили? Напишите итог наблюдения в комментариях.",
+        ))
 
-        trimmed = _trim_complete_sentences(text, 450, 750)
+        trimmed = _trim_complete_sentences(text, 1600, 2200)
 
-        self.assertGreater(len(text), 750)
-        self.assertGreaterEqual(len(trimmed), 450)
-        self.assertLessEqual(len(trimmed), 750)
+        self.assertGreater(len(text), 2200)
+        self.assertGreaterEqual(len(trimmed), 1600)
+        self.assertLessEqual(len(trimmed), 2200)
         self.assertTrue(trimmed.endswith("Напишите итог наблюдения в комментариях."))
-        self.assertNotIn("Предложение номер 15", trimmed)
+        self.assertNotIn("Предложение номер 27", trimmed)
+        self.assertEqual(len(trimmed.split("\n\n")), 4)
         self.assertTrue(trimmed.endswith("."))
 
     def test_course_ai_headers_are_ascii_safe_and_primary_request_is_sent(self):
@@ -285,6 +310,9 @@ class QualityAndGenerationTests(unittest.TestCase):
             self.assertEqual(headers["X-OpenRouter-Title"], "HochuVseZnat-AI")
             self.assertNotIn("Хочу всё знать", " ".join(headers.values()))
             self.assertEqual(json["model"], "primary/model")
+            self.assertEqual(json["max_tokens"], 3600)
+            self.assertEqual(json["temperature"], 0.45)
+            self.assertEqual(json["reasoning"], {"effort": "none"})
             self.assertEqual(timeout, 180)
             return response
 
@@ -324,16 +352,16 @@ class QualityAndGenerationTests(unittest.TestCase):
         invalid = json.dumps({item.value: "коротко" for item in PartType}, ensure_ascii=False)
         valid = json.dumps({
             "explain": _fitted(
-                "Генеративный интеллект создаёт новый ответ.", "Выберите пример.", 900,
+                "Генеративный интеллект создаёт новый ответ.", "Выберите пример.", 1850,
                 "Модель использует закономерности учебного материала и строит продолжение. ",
             ),
             "try": _fitted(
-                "Проверяем генеративный интеллект на практике.", "Сравните два ответа.", 750,
+                "Проверяем генеративный интеллект на практике.", "Сравните два ответа.", 1450,
                 "Задайте одну бытовую цель поиску и помощнику, затем отметьте различия. ",
             ),
             "reinforce": _fitted(
                 "Закрепляем отличие генерации от поиска.",
-                "Напишите найденное отличие в комментариях.", 550,
+                "Напишите найденное отличие в комментариях.", 1100,
                 "Укажите, где появился новый ответ и где потребовалась проверка результата. ",
             ),
         }, ensure_ascii=False)
@@ -346,33 +374,66 @@ class QualityAndGenerationTests(unittest.TestCase):
             generated = _generate_sync(lesson, (source,), client)
 
         self.assertEqual(generated.model, "fallback/model")
-        self.assertEqual(call.call_count, 4)
+        self.assertEqual(call.call_count, 6)
         self.assertEqual(
             [item.kwargs["model"] for item in call.call_args_list],
-            ["primary/model", "primary/model", "primary/model", "fallback/model"],
+            ["primary/model", "primary/model", "primary/model", "primary/model", "primary/model", "fallback/model"],
         )
         self.assertIn(invalid, call.call_args_list[1].args[0])
-        self.assertIn(invalid, call.call_args_list[3].args[0])
+        self.assertIn(invalid, call.call_args_list[5].args[0])
         self.assertIn("ниже минимума содержательно дополни", call.call_args_list[1].args[0])
 
     def test_length_limits_and_coherence(self):
         parts = (
-            CoursePart(PartType.EXPLAIN, "РАЗБИРАЕМ", _fitted("Объясняем языковую модель.", "Выберите пример.", 900, "Вероятное продолжение строится из элементов учебного материала. ")),
-            CoursePart(PartType.TRY, "ПРОБУЕМ", _fitted("Практика с языковой моделью.", "Попробуйте запрос.", 750, "Измените начальную фразу и внимательно сравните полученные варианты. ")),
-            CoursePart(PartType.REINFORCE, "ЗАКРЕПЛЯЕМ", _fitted("Закрепляем языковую модель.", "Напишите результат в комментариях.", 550, "Отметьте уверенную формулировку и оцените необходимость проверки. ")),
+            CoursePart(PartType.EXPLAIN, "РАЗБИРАЕМ", _fitted("Объясняем языковую модель.", "Выберите пример.", 1850, "Вероятное продолжение строится из элементов учебного материала. ")),
+            CoursePart(PartType.TRY, "ПРОБУЕМ", _fitted("Практика с языковой моделью.", "Попробуйте запрос.", 1450, "Измените начальную фразу и внимательно сравните полученные варианты. ")),
+            CoursePart(PartType.REINFORCE, "ЗАКРЕПЛЯЕМ", _fitted("Закрепляем языковую модель.", "Напишите результат в комментариях.", 1100, "Отметьте уверенную формулировку и оцените необходимость проверки. ")),
         )
         validate_parts(parts)
 
     def test_over_limit_is_rejected(self):
-        parts = tuple(CoursePart(kind, kind.public_name, "x" * 1200) for kind in PartType)
+        parts = tuple(CoursePart(kind, kind.public_name, "x" * 2500) for kind in PartType)
         with self.assertRaises(LessonQualityError):
             validate_parts(parts)
 
+    def test_every_part_requires_paragraph_structure_and_comments_cta(self):
+        parts = (
+            CoursePart(PartType.EXPLAIN, "РАЗБИРАЕМ", _fitted("Объясняем языковую модель.", "Выберите пример.", 1850, "Вероятное продолжение строится из элементов учебного материала. ")),
+            CoursePart(PartType.TRY, "ПРОБУЕМ", _fitted("Практика с языковой моделью.", "Попробуйте запрос.", 1450, "Измените начало фразы и сравните продолжения. ")),
+            CoursePart(PartType.REINFORCE, "ЗАКРЕПЛЯЕМ", _fitted("Закрепляем языковую модель.", "Проверьте результат.", 1100, "Отметьте уверенную формулировку и необходимость проверки. ")),
+        )
+        broken = (replace(parts[0], text=parts[0].text.replace("\n\n", " ")), *parts[1:])
+        with self.assertRaisesRegex(LessonQualityError, "paragraphs"):
+            validate_parts(broken)
+        missing_cta = (replace(parts[0], text=parts[0].text.rsplit("\n\n", 1)[0]), *parts[1:])
+        with self.assertRaisesRegex(LessonQualityError, "comments CTA"):
+            validate_parts(missing_cta)
+
+    def test_unsupported_certainty_and_anthropomorphic_claims_are_rejected(self):
+        parts = (
+            CoursePart(PartType.EXPLAIN, "РАЗБИРАЕМ", _fitted("Объясняем языковую модель.", "Выберите пример.", 1850, "Вероятное продолжение строится из элементов учебного материала. ")),
+            CoursePart(PartType.TRY, "ПРОБУЕМ", _fitted("Практика с языковой моделью.", "Попробуйте запрос.", 1450, "Измените начало фразы и сравните продолжения. ")),
+            CoursePart(PartType.REINFORCE, "ЗАКРЕПЛЯЕМ", _fitted("Закрепляем языковую модель.", "Проверьте результат.", 1100, "Отметьте уверенную формулировку и необходимость проверки. ")),
+        )
+        unsupported = (
+            replace(parts[0], text=parts[0].text.replace("Главное", "Модель понимает тысячи вариантов. Главное")),
+            *parts[1:],
+        )
+        with self.assertRaisesRegex(LessonQualityError, "anthropomorphic|unsupported"):
+            validate_parts(unsupported)
+        warning = (
+            replace(parts[0], text=parts[0].text.replace(
+                "Главное", "Ошибка — надеяться, что ИИ сам догадается. Главное"
+            )),
+            *parts[1:],
+        )
+        validate_parts(warning)
+
     def test_repeated_comments_cta_is_rejected(self):
         parts = (
-            CoursePart(PartType.EXPLAIN, "РАЗБИРАЕМ", _fitted("Объясняем контекст модели.", "Выберите пример.", 900, "Исходные сведения направляют содержание и делают результат конкретнее. ")),
-            CoursePart(PartType.TRY, "ПРОБУЕМ", _fitted("Проверяем контекст модели.", "Попробуйте запрос.", 750, "Добавьте аудиторию и обстоятельства, а затем оцените полученный вариант. ")),
-            CoursePart(PartType.REINFORCE, "ЗАКРЕПЛЯЕМ", _fitted("Закрепляем контекст модели.", "Напишите результат в комментариях.", 550, "Отметьте полезную деталь и сформулируйте собственный итог работы. ")),
+            CoursePart(PartType.EXPLAIN, "РАЗБИРАЕМ", _fitted("Объясняем контекст модели.", "Выберите пример.", 1850, "Исходные сведения направляют содержание и делают результат конкретнее. ")),
+            CoursePart(PartType.TRY, "ПРОБУЕМ", _fitted("Проверяем контекст модели.", "Попробуйте запрос.", 1450, "Добавьте аудиторию и обстоятельства, а затем оцените полученный вариант. ")),
+            CoursePart(PartType.REINFORCE, "ЗАКРЕПЛЯЕМ", _fitted("Закрепляем контекст модели.", "Напишите результат в комментариях.", 1100, "Отметьте полезную деталь и сформулируйте собственный итог работы. ")),
         )
         with self.assertRaisesRegex(LessonQualityError, "CTA repeats"):
             validate_parts(parts, (parts[-1].text,))
@@ -381,9 +442,9 @@ class QualityAndGenerationTests(unittest.TestCase):
         lesson = load_curriculum(CURRICULUM).lessons[0]
         source = RetrievedSource(lesson.sources[0], "официальный материал " * 30, "hash")
         payload = {
-            "explain": _fitted("Генеративный интеллект создаёт ответ.", "Выберите пример.", 980, "Модель соединяет изученные закономерности и формирует новое продолжение. "),
-            "try": _fitted("Проверяем генеративный интеллект.", "Попробуйте сравнение.", 880, "Задайте одинаковую бытовую цель поиску и помощнику, затем сопоставьте выдачу. "),
-            "reinforce": _fitted("Закрепляем генеративный интеллект.", "Напишите вывод в комментариях.", 720, "Назовите найденное отличие и объясните, какой результат требует проверки. "),
+            "explain": _fitted("Генеративный интеллект создаёт ответ.", "Выберите пример.", 1950, "Модель соединяет изученные закономерности и формирует новое продолжение. "),
+            "try": _fitted("Проверяем генеративный интеллект.", "Попробуйте сравнение.", 1500, "Задайте одинаковую бытовую цель поиску и помощнику, затем сопоставьте выдачу. "),
+            "reinforce": _fitted("Закрепляем генеративный интеллект.", "Напишите вывод в комментариях.", 1150, "Назовите найденное отличие и объясните, какой результат требует проверки. "),
         }
         client = CourseAIClient("test/model", "")
         with patch.object(client, "complete", return_value=(json.dumps(payload, ensure_ascii=False), "test/model")) as call:
@@ -391,14 +452,15 @@ class QualityAndGenerationTests(unittest.TestCase):
         self.assertEqual(len(generated.parts), 3)
         self.assertEqual(call.call_count, 1)
         self.assertEqual(generated.used_sources, (lesson.sources[0].url,))
+        self.assertIn(lesson.future_topics[0], call.call_args.args[0])
 
     def test_special_day_generation_uses_special_context_and_three_parts(self):
         special = load_curriculum_catalog(CURRICULUM_DIR).special_day_for_date(date(2026, 12, 31))
         source = RetrievedSource(special.sources[0], "официальный итоговый материал " * 30, "hash")
         payload = {
-            "explain": _fitted("Подводим итоги навыкам искусственного интеллекта.", "Выберите пример.", 900, "Программа связывает проверку создание и безопасное применение изученных подходов. "),
-            "try": _fitted("Создаём карту навыков искусственного интеллекта.", "Составьте результат.", 750, "Отметьте освоенные действия и выберите понятное продолжение образовательной программы. "),
-            "reinforce": _fitted("Закрепляем карту навыков искусственного интеллекта.", "Напишите самый полезный курс в комментариях.", 550, "Предложите тему для продолжения и назовите практический результат этого года. "),
+            "explain": _fitted("Подводим итоги навыкам искусственного интеллекта.", "Выберите пример.", 1850, "Программа связывает проверку создание и безопасное применение изученных подходов. "),
+            "try": _fitted("Создаём карту навыков искусственного интеллекта.", "Составьте результат.", 1450, "Отметьте освоенные действия и выберите понятное продолжение образовательной программы. "),
+            "reinforce": _fitted("Закрепляем карту навыков искусственного интеллекта.", "Напишите самый полезный курс в комментариях.", 1100, "Предложите тему для продолжения и назовите практический результат этого года. "),
         }
         client = CourseAIClient("test/model", "")
         with patch.object(client, "complete", return_value=(json.dumps(payload, ensure_ascii=False), "test/model")) as call:
@@ -469,6 +531,15 @@ class CoverTests(unittest.TestCase):
                 self.assertTrue(layout.text_within_safe_area)
                 self.assertLessEqual(len(layout.title_lines), 3)
 
+    def test_lesson_specific_art_is_stored_once_and_reused_for_three_parts(self):
+        lesson = load_curriculum(CURRICULUM).lessons[1]
+        self.assertTrue(lesson_art_path(lesson).exists())
+        covers = [render_cover(lesson, part_type)[0] for part_type in PartType]
+        self.assertEqual(len(set(covers)), 3)
+        for content in covers:
+            with Image.open(__import__("io").BytesIO(content)) as image:
+                self.assertEqual(image.size, (SIZE, SIZE))
+
     def test_special_cover_has_no_fake_lesson_16_of_15(self):
         special = load_curriculum_catalog(CURRICULUM_DIR).special_day_for_date(date(2026, 8, 29))
         metadata = " ".join(cover_metadata(special))
@@ -478,8 +549,8 @@ class CoverTests(unittest.TestCase):
 
 
 class SchedulerAndReconciliationTests(unittest.TestCase):
-    def test_course_ai_models_remain_paid_gemini_pair(self):
-        self.assertEqual(COURSE_AI_MODEL, "google/gemini-2.5-flash-lite")
+    def test_course_ai_uses_qwen_primary_and_paid_gemini_fallback(self):
+        self.assertEqual(COURSE_AI_MODEL, "qwen/qwen3.5-flash-02-23")
         self.assertEqual(COURSE_AI_FALLBACK_MODEL, "google/gemini-2.5-flash")
 
     def test_scheduler_has_three_moscow_jobs_and_unchanged_marketcode_job(self):
@@ -520,6 +591,23 @@ class PublisherContractTests(unittest.IsolatedAsyncioTestCase):
 
         photo.assert_awaited_once_with(TELEGRAM_CHANNEL_ID, b"image", text)
         self.assertEqual(result, "10")
+
+    async def test_long_course_article_sends_cover_then_full_text_without_truncation(self):
+        text = "Полный учебный материал. " * 80
+        photo_result = Mock(message_id=10)
+        text_result = Mock(message_id=11)
+        fake_bot = Mock()
+        fake_bot.send_photo = AsyncMock(return_value=photo_result)
+        fake_bot.send_message = AsyncMock(return_value=text_result)
+        with patch.object(bot_module, "_bot", fake_bot):
+            result = await bot_module.send_photo_with_caption("channel", b"image", text)
+        self.assertEqual(result, "10,11")
+        self.assertNotIn("caption", fake_bot.send_photo.await_args.kwargs)
+        fake_bot.send_message.assert_awaited_once_with(chat_id="channel", text=text)
+
+    def test_editorial_limits_fit_platform_text_messages(self):
+        self.assertGreater(LIMITS[PartType.EXPLAIN][0], bot_module._CAPTION_LIMIT)
+        self.assertLess(max(maximum for _, maximum in LIMITS.values()), 4000)
 
     async def test_platform_calls_are_compatible_and_vk_is_text_only(self):
         lesson = load_curriculum(CURRICULUM).lessons[0]

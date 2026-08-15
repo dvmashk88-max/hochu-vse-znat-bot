@@ -3,7 +3,7 @@ season: {id: season-02, number: 2, title: Сентябрь 2026, month: 2026-09,
 
 x-sources:
   prompt-ms: &prompt_ms {title: Создание эффективных prompts — Microsoft Learn, url: https://learn.microsoft.com/en-us/training/modules/create-prompts-for-generative-ai-training-tools/}
-  prompt-openai: &prompt_openai {title: Лучшие практики prompt engineering — OpenAI, url: https://help.openai.com/en/articles/6654000-best-practices-for-prompt-engineering-with-the-openai-api}
+  prompt-openai: &prompt_openai {title: Практика создания запросов — OpenAI Academy, url: https://academy.openai.com/public/clubs/work-users-ynjqu/resources/prompting}
   prompt-anthropic: &prompt_anthropic {title: Обзор prompt engineering — Anthropic, url: https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/overview}
   custom-ms: &custom_ms {title: Создание custom prompt — Microsoft Learn, url: https://learn.microsoft.com/en-us/ai-builder/create-a-custom-prompt}
 

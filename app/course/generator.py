@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 _API_URL = "https://openrouter.ai/api/v1/chat/completions"
 _PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "course_lesson_prompt.txt"
-_MAX_ATTEMPTS = 3
+_MAX_ATTEMPTS = 5
 
 
 class CourseGenerationError(RuntimeError):
@@ -47,8 +47,11 @@ class CourseAIClient:
                     json={
                         "model": candidate,
                         "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 2400,
-                        "temperature": 0.35,
+                        "max_tokens": 3600,
+                        "temperature": 0.45,
+                        # Editorial prose does not need chain-of-thought. Disabling
+                        # it keeps Qwen's budget for the three final articles.
+                        "reasoning": {"effort": "none"},
                     },
                     timeout=180,
                 )
@@ -89,6 +92,10 @@ def _prompt(lesson: CourseDay, sources: tuple[RetrievedSource, ...], feedback: s
         explain_objective=lesson.explain_objective,
         try_objective=lesson.try_objective,
         reinforce_objective=lesson.reinforce_objective,
+        future_topics=(
+            "\n".join(f"- {topic}" for topic in lesson.future_topics)
+            if lesson.future_topics else "Нет будущих тем внутри текущего курса."
+        ),
         source_context=_source_context(sources),
         previous_ctas="\n".join(previous_reinforce_texts) or "Нет предыдущих частей.",
         feedback=feedback or "Нет: это первая версия.",
@@ -117,13 +124,26 @@ def _trim_complete_sentences(text: str, minimum: int, maximum: int) -> str:
     normalized = text.strip()
     if len(normalized) <= maximum:
         return normalized
-    sentences = re.split(r"(?<=[.!?])\s+", normalized)
-    while len(" ".join(sentences)) > maximum and len(sentences) > 2:
-        candidate = " ".join((*sentences[:-2], sentences[-1]))
-        if len(candidate) < minimum:
+    paragraphs = [item.strip() for item in re.split(r"\n\s*\n", normalized) if item.strip()]
+    while len("\n\n".join(paragraphs)) > maximum:
+        changed = False
+        # Preserve the opening hook and final comments CTA. Shorten development
+        # paragraphs only, always at a complete sentence boundary.
+        for index in range(len(paragraphs) - 2, 0, -1):
+            sentences = re.split(r"(?<=[.!?])\s+", paragraphs[index])
+            if len(sentences) < 2:
+                continue
+            candidate_paragraphs = list(paragraphs)
+            candidate_paragraphs[index] = " ".join(sentences[:-1])
+            candidate = "\n\n".join(candidate_paragraphs)
+            if len(candidate) < minimum:
+                continue
+            paragraphs = candidate_paragraphs
+            changed = True
             break
-        sentences.pop(-2)
-    return " ".join(sentences)
+        if not changed:
+            break
+    return "\n\n".join(paragraphs)
 
 
 def _normalize_part_lengths(parts: tuple[CoursePart, ...]) -> tuple[CoursePart, ...]:
@@ -163,6 +183,9 @@ def _generate_sync(lesson: CourseDay, sources: tuple[RetrievedSource, ...], clie
                     f"Версия {attempt} отклонена. Исправь все ошибки и верни весь JSON заново: {exc}. "
                     "Часть выше максимума перепиши короче без новых деталей. "
                     "Часть ниже минимума содержательно дополни конкретным пояснением или шагом. "
+                    "Сохрани абзацную структуру: зацепка, развитие, вывод и финальный вопрос в комментарии. "
+                    "Если ошибка называет конкретную запрещённую формулировку, удали её из всех трёх частей "
+                    "и не заменяй другим неподтверждённым количеством или обещанием результата. "
                     "Корректные части сохрани максимально близко к текущей версии. "
                     "Не обрезай текст механически; заверши каждую часть естественно.\n"
                     f"Отклонённый JSON, который нужно именно отредактировать:\n{raw}"

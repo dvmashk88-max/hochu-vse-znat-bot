@@ -2,10 +2,10 @@ version: 1
 season: {id: season-03, number: 3, title: Октябрь 2026, month: 2026-10, timezone: Europe/Moscow}
 
 x-sources:
-  truth: &truth {title: Проверка правдивости AI-ответов — OpenAI, url: https://help.openai.com/en/articles/8313428-does-chatgpt-tell-the-truth}
+  truth: &truth {title: Ответственное использование и проверка ответов — OpenAI Academy, url: https://academy.openai.com/public/clubs/work-users-ynjqu/resources/responsible-use-of-chatgpt-at-work-2025-09-08}
   web: &web {title: Web search — OpenAI API, url: https://platform.openai.com/docs/guides/tools-web-search}
   responsible: &responsible {title: Принципы ответственного ИИ — Microsoft, url: https://www.microsoft.com/en-us/ai/principles-and-approach}
-  files: &files {title: Работа с загруженными файлами — OpenAI, url: https://help.openai.com/en/articles/8555545-uploading-files-in-chatgpt}
+  files: &files {title: Работа с файлами — OpenAI Academy, url: https://academy.openai.com/public/clubs/work-users-ynjqu/resources/working-with-files}
   structured: &structured {title: Structured Outputs — OpenAI API, url: https://platform.openai.com/docs/guides/structured-outputs}
   prompt: &prompt {title: Создание custom prompt — Microsoft Learn, url: https://learn.microsoft.com/en-us/ai-builder/create-a-custom-prompt}
 

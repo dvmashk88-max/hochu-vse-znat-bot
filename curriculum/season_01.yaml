@@ -47,7 +47,7 @@ courses:
         reinforce_objective: Определить одну личную задачу, подходящую для такого преобразования.
         sources:
           - title: Возможности AI-помощника на примере ChatGPT — OpenAI
-            url: https://help.openai.com/en/articles/9260256-chatgpt-capabilities-overview
+            url: https://academy.openai.com/en/public/clubs/work-users-ynjqu/resources/chatgpt-basics
 
       - id: lesson-04
         date: 2026-08-17
@@ -59,7 +59,7 @@ courses:
         reinforce_objective: Составить личное правило, когда ответу нельзя доверять без источника.
         sources:
           - title: Does ChatGPT tell the truth? — OpenAI
-            url: https://help.openai.com/en/articles/8313428-does-chatgpt-tell-the-truth
+            url: https://academy.openai.com/public/clubs/work-users-ynjqu/resources/responsible-use-of-chatgpt-at-work-2025-09-08
 
       - id: lesson-05
         date: 2026-08-18
@@ -107,7 +107,7 @@ courses:
         reinforce_objective: Написать, какое уточнение дало наибольший эффект и почему.
         sources:
           - title: Prompt engineering best practices — OpenAI
-            url: https://help.openai.com/en/articles/6654000-best-practices-for-prompt-engineering-with-the-openai-api
+            url: https://academy.openai.com/public/clubs/work-users-ynjqu/resources/prompting
 
       - id: lesson-09
         date: 2026-08-22
@@ -119,7 +119,7 @@ courses:
         reinforce_objective: Найти один сигнал сомнительного ответа и поделиться им.
         sources:
           - title: Does ChatGPT tell the truth? — OpenAI
-            url: https://help.openai.com/en/articles/8313428-does-chatgpt-tell-the-truth
+            url: https://academy.openai.com/public/clubs/work-users-ynjqu/resources/responsible-use-of-chatgpt-at-work-2025-09-08
 
       - id: lesson-10
         date: 2026-08-23
@@ -155,7 +155,7 @@ courses:
         reinforce_objective: Написать, что модель нашла верно и что пришлось проверить вручную.
         sources:
           - title: File Uploads FAQ — OpenAI
-            url: https://help.openai.com/en/articles/8555545-uploading-files-in-chatgpt
+            url: https://academy.openai.com/public/clubs/work-users-ynjqu/resources/working-with-files
 
       - id: lesson-13
         date: 2026-08-26
@@ -167,7 +167,7 @@ courses:
         reinforce_objective: Поделиться полезным шагом плана и тем, что пришлось уточнить.
         sources:
           - title: ChatGPT Capabilities Overview — OpenAI
-            url: https://help.openai.com/en/articles/9260256-chatgpt-capabilities-overview
+            url: https://academy.openai.com/en/public/clubs/work-users-ynjqu/resources/chatgpt-basics
 
       - id: lesson-14
         date: 2026-08-27
@@ -193,7 +193,7 @@ courses:
           - title: Create effective prompts — Microsoft Learn
             url: https://learn.microsoft.com/en-us/training/modules/create-prompts-for-generative-ai-training-tools/
           - title: Does ChatGPT tell the truth? — OpenAI
-            url: https://help.openai.com/en/articles/8313428-does-chatgpt-tell-the-truth
+            url: https://academy.openai.com/public/clubs/work-users-ynjqu/resources/responsible-use-of-chatgpt-at-work-2025-09-08
 
 special_days:
   - id: special-2026-08-29
@@ -210,7 +210,7 @@ special_days:
       - title: Принципы ответственного ИИ — Microsoft
         url: https://www.microsoft.com/en-us/ai/principles-and-approach
       - title: Лучшие практики prompt engineering — OpenAI
-        url: https://help.openai.com/en/articles/6654000-best-practices-for-prompt-engineering-with-the-openai-api
+        url: https://academy.openai.com/public/clubs/work-users-ynjqu/resources/prompting
 
   - id: special-2026-08-30
     date: 2026-08-30
@@ -224,7 +224,7 @@ special_days:
     reinforce_objective: Назвать ошибку, которую читатель теперь будет проверять в первую очередь.
     sources:
       - title: Лучшие практики prompt engineering — OpenAI
-        url: https://help.openai.com/en/articles/6654000-best-practices-for-prompt-engineering-with-the-openai-api
+        url: https://academy.openai.com/public/clubs/work-users-ynjqu/resources/prompting
       - title: Принципы ответственного ИИ — Microsoft
         url: https://www.microsoft.com/en-us/ai/principles-and-approach
 
@@ -242,4 +242,4 @@ special_days:
       - title: Создание эффективных prompts — Microsoft Learn
         url: https://learn.microsoft.com/en-us/training/modules/create-prompts-for-generative-ai-training-tools/
       - title: Проверка правдивости AI-ответов — OpenAI
-        url: https://help.openai.com/en/articles/8313428-does-chatgpt-tell-the-truth
+        url: https://academy.openai.com/public/clubs/work-users-ynjqu/resources/responsible-use-of-chatgpt-at-work-2025-09-08

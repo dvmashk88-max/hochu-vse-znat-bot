@@ -135,6 +135,10 @@ def load_curriculum(path: str | Path) -> Curriculum:
         raw_lessons = course.get("lessons")
         if not isinstance(raw_lessons, list) or not raw_lessons:
             raise CurriculumError(f"{context}: lessons are required")
+        course_topics = tuple(
+            _required_text(item, "topic", f"{course_id} lesson #{index}")
+            for index, item in enumerate(raw_lessons, 1)
+        )
         course_dates: set[date] = set()
         for lesson_index, item in enumerate(raw_lessons, 1):
             item_context = f"{course_id} lesson #{lesson_index}"
@@ -187,6 +191,7 @@ def load_curriculum(path: str | Path) -> Curriculum:
                 explain_objective=_required_text(item, "explain_objective", item_context),
                 try_objective=_required_text(item, "try_objective", item_context),
                 reinforce_objective=_required_text(item, "reinforce_objective", item_context),
+                future_topics=course_topics[lesson_index:],
             ))
         if course_dates != {start.fromordinal(start.toordinal() + offset) for offset in range((end - start).days + 1)}:
             raise CurriculumError(f"{course_id}: lessons must cover every date from start_date to end_date")

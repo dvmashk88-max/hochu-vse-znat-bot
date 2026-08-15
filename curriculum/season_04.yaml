@@ -4,9 +4,9 @@ season: {id: season-04, number: 4, title: Ноябрь 2026, month: 2026-11, tim
 x-sources:
   custom: &custom {title: Создание custom prompt — Microsoft Learn, url: https://learn.microsoft.com/en-us/ai-builder/create-a-custom-prompt}
   prompt: &prompt {title: Создание эффективных prompts — Microsoft Learn, url: https://learn.microsoft.com/en-us/training/modules/create-prompts-for-generative-ai-training-tools/}
-  capability: &capability {title: Возможности AI-помощника на примере ChatGPT — OpenAI, url: https://help.openai.com/en/articles/9260256-chatgpt-capabilities-overview}
+  capability: &capability {title: Основы и возможности ChatGPT — OpenAI Academy, url: https://academy.openai.com/en/public/clubs/work-users-ynjqu/resources/chatgpt-basics}
   responsible: &responsible {title: Принципы ответственного ИИ — Microsoft, url: https://www.microsoft.com/en-us/ai/principles-and-approach}
-  files: &files {title: Работа с загруженными файлами — OpenAI, url: https://help.openai.com/en/articles/8555545-uploading-files-in-chatgpt}
+  files: &files {title: Работа с файлами — OpenAI Academy, url: https://academy.openai.com/public/clubs/work-users-ynjqu/resources/working-with-files}
   library: &library {title: Библиотека prompts для рабочих задач — Microsoft Learn, url: https://learn.microsoft.com/en-us/microsoft-copilot-studio/prompt-library}
 
 courses:

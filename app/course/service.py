@@ -18,6 +18,7 @@ from app.course.covers import render_cover
 from app.course.curriculum import CurriculumCatalog, load_curriculum_catalog
 from app.course.generator import CourseGenerationError, generate_lesson
 from app.course.models import CourseDay, PartType
+from app.course.quality import LessonQualityError, validate_parts
 from app.course.repository import (
     claim_generation,
     claim_publication,
@@ -54,7 +55,43 @@ async def prepare_lesson(lesson: CourseDay, retriever: SourceRetriever | None = 
         ), persistent_dedupe=False)
         return False
     if status == "generated":
-        return True
+        try:
+            stored_parts = tuple(load_part(lesson, part_type) for part_type in PartType)
+            if any(part is None for part in stored_parts):
+                raise LessonQualityError(["stored lesson is missing one or more parts"])
+            validate_parts(stored_parts, recent_reinforce_texts(lesson))
+        except LessonQualityError as exc:
+            try:
+                already_started = any(
+                    publication_statuses(lesson, part_type) for part_type in PartType
+                )
+            except Exception as state_exc:
+                logger.error(
+                    "Course legacy publication state read failed: lesson=%s error=%s",
+                    lesson.lesson_id, state_exc,
+                )
+                return False
+            if already_started:
+                logger.warning(
+                    "Course lesson keeps legacy generated text because publication already started: "
+                    "lesson=%s error=%s",
+                    lesson.lesson_id, exc,
+                )
+                return True
+            logger.info(
+                "Course lesson will be regenerated under current quality rules: lesson=%s error=%s",
+                lesson.lesson_id, exc,
+            )
+            save_generation_failure(lesson, f"Stale generated lesson: {exc}", "failed")
+            status = "failed"
+        except Exception as exc:
+            logger.error(
+                "Course generated lesson quality read failed: lesson=%s error=%s",
+                lesson.lesson_id, exc,
+            )
+            return False
+        else:
+            return True
     try:
         claimed = claim_generation(lesson)
     except Exception as exc:

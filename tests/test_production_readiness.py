@@ -74,12 +74,58 @@ class PreparationTests(unittest.IsolatedAsyncioTestCase):
         day = load_curriculum_catalog(CATALOG).days[0]
         with (
             patch("app.course.service.generation_status", return_value="generated"),
+            patch("app.course.service.load_part", return_value=object()),
+            patch("app.course.service.recent_reinforce_texts", return_value=()),
+            patch("app.course.service.validate_parts"),
             patch("app.course.service.claim_generation") as claim,
             patch("app.course.service.generate_lesson", new=AsyncMock()) as generate,
         ):
             self.assertTrue(await service.prepare_lesson(day))
         claim.assert_not_called()
         generate.assert_not_awaited()
+
+    async def test_unpublished_legacy_generated_artifact_is_regenerated(self):
+        day = load_curriculum_catalog(CATALOG).days[0]
+        stale = StoredPart(
+            day.season_id, day.course_id, day.lesson_id, day.date,
+            PartType.EXPLAIN, "title", "слишком коротко", "ref", "hash", b"image",
+        )
+        source = RetrievedSource(day.sources[0], "официальный материал " * 50, "hash")
+        retriever = AsyncMock()
+        retriever.retrieve.return_value = (source,)
+        generated = type("Generated", (), {"model": "qwen/qwen3.5-flash-02-23"})()
+        with (
+            patch("app.course.service.generation_status", return_value="generated"),
+            patch("app.course.service.load_part", return_value=stale),
+            patch("app.course.service.recent_reinforce_texts", return_value=()),
+            patch("app.course.service.publication_statuses", return_value={}),
+            patch("app.course.service.save_generation_failure") as invalidate,
+            patch("app.course.service.claim_generation", return_value=True),
+            patch("app.course.service.generate_lesson", new=AsyncMock(return_value=generated)) as generate,
+            patch("app.course.service.render_cover", return_value=(b"image", "digest")),
+            patch("app.course.service.save_generated_lesson"),
+        ):
+            self.assertTrue(await service.prepare_lesson(day, retriever))
+        invalidate.assert_called_once()
+        generate.assert_awaited_once()
+
+    async def test_started_legacy_lesson_is_not_rewritten(self):
+        day = load_curriculum_catalog(CATALOG).days[0]
+        stale = StoredPart(
+            day.season_id, day.course_id, day.lesson_id, day.date,
+            PartType.EXPLAIN, "title", "слишком коротко", "ref", "hash", b"image",
+        )
+        with (
+            patch("app.course.service.generation_status", return_value="generated"),
+            patch("app.course.service.load_part", return_value=stale),
+            patch("app.course.service.recent_reinforce_texts", return_value=()),
+            patch("app.course.service.publication_statuses", return_value={"telegram": "published"}),
+            patch("app.course.service.save_generation_failure") as invalidate,
+            patch("app.course.service.claim_generation") as claim,
+        ):
+            self.assertTrue(await service.prepare_lesson(day))
+        invalidate.assert_not_called()
+        claim.assert_not_called()
 
     async def test_needs_review_is_not_regenerated(self):
         day = load_curriculum_catalog(CATALOG).days[0]

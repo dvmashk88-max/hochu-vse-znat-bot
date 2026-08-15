@@ -7,10 +7,45 @@ from app.course.models import CoursePart, PartType
 
 
 LIMITS = {
-    PartType.EXPLAIN: (850, 1000),
-    PartType.TRY: (650, 900),
-    PartType.REINFORCE: (450, 750),
+    PartType.EXPLAIN: (1600, 2200),
+    PartType.TRY: (1200, 1700),
+    PartType.REINFORCE: (900, 1300),
 }
+
+PARAGRAPH_LIMITS = {
+    PartType.EXPLAIN: (4, 7),
+    PartType.TRY: (4, 7),
+    PartType.REINFORCE: (3, 6),
+}
+MAX_HOOK_CHARS = 500
+
+_COMMENT_ACTION = re.compile(
+    r"\b(напишите|расскажите|поделитесь|предложите|ответьте)\b.*\bкомментари",
+    re.I | re.S,
+)
+_TRY_ACTION = re.compile(
+    r"\b(сделайте|попробуйте|напишите|сравните|выберите|возьмите|откройте|составьте|измените|проверьте)\b",
+    re.I,
+)
+_EXAMPLE_MARKER = re.compile(r"\b(например|представьте|допустим|к примеру|возьмём|сравним)\b", re.I)
+_BANNED_CLICHE = re.compile(
+    r"\b(искусственный интеллект стремительно меняет мир|в современном мире|"
+    r"ни для кого не секрет|давайте погрузимся|революционная технология)\b",
+    re.I,
+)
+_ANTHROPOMORPHIC_CLAIM = re.compile(
+    r"\b(?:модел[а-яё]*|ии|систем[а-яё]*|помощник[а-яё]*)\s+"
+    r"(?:сам[а-яё]*\s+|действительно\s+)?"
+    r"(?:вспомина[а-яё]*|пойм[а-яё]*|поня[а-яё]*|понима[а-яё]*|догад[а-яё]*|"
+    r"зна[а-яё]*|осозна[а-яё]*)\b",
+    re.I,
+)
+_UNSUPPORTED_CERTAINTY = re.compile(
+    r"\b(?:тысяч[а-яё]*|миллион[а-яё]*|исключительно|"
+    r"доказывает|скорее\s+всего|чаще\s+всего|любая\s+современная|"
+    r"быстрее\s+(?:человека|людей))\b",
+    re.I,
+)
 
 
 class LessonQualityError(ValueError):
@@ -34,6 +69,20 @@ def _comments_cta(text: str) -> str:
     return next((sentence.lower().strip() for sentence in reversed(sentences) if "комментари" in sentence.lower()), "")
 
 
+def _paragraphs(text: str) -> list[str]:
+    return [item.strip() for item in re.split(r"\n\s*\n", text.strip()) if item.strip()]
+
+
+def _anthropomorphic_claim(text: str) -> re.Match | None:
+    for match in _ANTHROPOMORPHIC_CLAIM.finditer(text):
+        sentence_start = max(text.rfind(mark, 0, match.start()) for mark in ".!?\n") + 1
+        prefix = text[sentence_start:match.start()].lower()
+        if re.search(r"\b(?:не|нельзя|ошибк[а-яё]*|неверн[а-яё]*|не\s+стоит|не\s+ждите)\b", prefix):
+            continue
+        return match
+    return None
+
+
 def validate_parts(parts: tuple[CoursePart, ...], previous_reinforce_texts: tuple[str, ...] = ()) -> None:
     errors: list[str] = []
     by_type = {part.part_type: part for part in parts}
@@ -53,6 +102,32 @@ def validate_parts(parts: tuple[CoursePart, ...], previous_reinforce_texts: tupl
             errors.append(f"{part_type.value}: markdown fence is forbidden")
         if re.search(r"(как языковая модель,? я|я — ии|я являюсь ии|вот ваш ответ|system prompt)", text, re.I):
             errors.append(f"{part_type.value}: model meta-instruction found")
+        paragraphs = _paragraphs(text)
+        min_paragraphs, max_paragraphs = PARAGRAPH_LIMITS[part_type]
+        if not min_paragraphs <= len(paragraphs) <= max_paragraphs:
+            errors.append(
+                f"{part_type.value}: {len(paragraphs)} paragraphs, "
+                f"expected {min_paragraphs}-{max_paragraphs}"
+            )
+        if paragraphs and len(paragraphs[0]) > MAX_HOOK_CHARS:
+            errors.append(f"{part_type.value}: opening hook is too long")
+        if paragraphs and not (
+            re.search(r"комментари", paragraphs[-1], re.I)
+            and (_COMMENT_ACTION.search(paragraphs[-1]) or "?" in paragraphs[-1])
+        ):
+            errors.append(f"{part_type.value}: final paragraph must contain a concrete comments CTA")
+        if _BANNED_CLICHE.search(text):
+            errors.append(f"{part_type.value}: generic AI cliche found")
+        anthropomorphic = _anthropomorphic_claim(text)
+        if anthropomorphic:
+            errors.append(
+                f"{part_type.value}: anthropomorphic model claim found: {anthropomorphic.group(0)}"
+            )
+        unsupported = _UNSUPPORTED_CERTAINTY.search(text)
+        if unsupported:
+            errors.append(
+                f"{part_type.value}: unsupported quantity or certainty claim found: {unsupported.group(0)}"
+            )
     if len(by_type) == 3:
         explain, try_part, reinforce = (by_type[item].text for item in PartType)
         if not (_tokens(explain) & _tokens(try_part)):
@@ -64,13 +139,15 @@ def validate_parts(parts: tuple[CoursePart, ...], previous_reinforce_texts: tupl
         openings = [" ".join(text.lower().split()[:8]) for text in (explain, try_part, reinforce)]
         if len(set(openings)) != 3:
             errors.append("lesson parts have identical introductions")
-        if not re.search(r"комментари", reinforce, re.I):
-            errors.append("reinforce part must contain a concrete comments CTA")
-        current_cta = _comments_cta(reinforce)
+        if not _EXAMPLE_MARKER.search(explain):
+            errors.append("explain part must contain a concrete example or analogy")
+        current_ctas = [_comments_cta(text) for text in (explain, try_part, reinforce)]
+        if len(set(current_ctas)) != 3:
+            errors.append("lesson parts must use different comments CTAs")
         previous_ctas = {_comments_cta(text) for text in previous_reinforce_texts}
-        if current_cta and current_cta in previous_ctas:
-            errors.append("reinforce comments CTA repeats a previous lesson")
-        if not re.search(r"\b(сделайте|попробуйте|напишите|сравните|выберите|возьмите|откройте|составьте)\b", try_part, re.I):
+        if any(current_cta and current_cta in previous_ctas for current_cta in current_ctas):
+            errors.append("comments CTA repeats a previous lesson")
+        if not _TRY_ACTION.search(try_part):
             errors.append("try part must contain a clear action")
     if errors:
         raise LessonQualityError(errors)
