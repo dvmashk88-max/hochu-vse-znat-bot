@@ -20,6 +20,8 @@ _MIN_WORDS = 300
 _MAX_WORDS = 500
 _MIN_BODY_WORDS = 275
 _MAX_BODY_WORDS = 440
+_TARGET_MIN_BODY_WORDS = 320
+_TARGET_MAX_BODY_WORDS = 400
 _MAX_ARTICLE_CHARS = 3800
 _MAX_REFINEMENT_ATTEMPTS = 3
 _MAX_SAFETY_GENERATION_ATTEMPTS = 3
@@ -196,7 +198,8 @@ def _refinement_prompt(entry: ContentPlanEntry, body: str, words: int, chars: in
 def _quality_review_prompt(entry: ContentPlanEntry, body: str) -> str:
     return f"""
 Ты — выпускающий редактор экспертного материала про цифровые сервисы.
-Перепиши статью по теме «{entry.topic}», сохранив полезную структуру и объём {_MIN_BODY_WORDS}–{_MAX_BODY_WORDS} слов.
+Перепиши статью по теме «{entry.topic}», сохранив полезную структуру и целевой объём {_TARGET_MIN_BODY_WORDS}–{_TARGET_MAX_BODY_WORDS} слов.
+Жёстко допустимый диапазон основной части — {_MIN_BODY_WORDS}–{_MAX_BODY_WORDS} слов.
 
 Обязательная проверка качества:
 - не предлагай VPN, вымышленные, публичные, чужие адреса или номера телефонов;
@@ -232,6 +235,21 @@ def _safety_regeneration_prompt(entry: ContentPlanEntry, body: str, reason: str)
 
 Отклонённая версия:
 {body}
+""".strip()
+
+
+def _quality_regeneration_prompt(entry: ContentPlanEntry, reason: str) -> str:
+    return f"""
+Предыдущая версия статьи не прошла обязательную проверку объёма.
+Причина отклонения: {reason}
+
+Напиши материал заново с нуля по теме «{entry.topic}» и сохрани его цель: {entry.goal}
+Целевой объём основной части — {_TARGET_MIN_BODY_WORDS}–{_TARGET_MAX_BODY_WORDS} слов.
+Жёстко допустимый диапазон — {_MIN_BODY_WORDS}–{_MAX_BODY_WORDS} слов, а готовая публикация с заголовком и CTA не должна превышать {_MAX_ARTICLE_CHARS} символов.
+Сохрани полезные факты, пошаговую инструкцию, советы, короткий FAQ и вывод, но не копируй и не сокращай предыдущую версию: создай новую компактную статью.
+Не добавляй отдельный заголовок H1, рекламу, ссылки, CTA или комментарии о проверке.
+Не добавляй названия банков, платёжных систем, банковские инструкции или придуманные способы оплаты.
+Верни только новую основную часть статьи.
 """.strip()
 
 
@@ -334,7 +352,22 @@ def _generate_sync(entry: ContentPlanEntry, settings: MarketCodeSettings) -> Gen
             prompt = _safety_regeneration_prompt(entry, body, str(exc))
             continue
 
-        return _build_article(entry, body, model)
+        try:
+            return _build_article(entry, body, model)
+        except ValueError as exc:
+            if attempt == _MAX_SAFETY_GENERATION_ATTEMPTS:
+                raise ValueError(
+                    "MarketCode article failed quality validation after "
+                    f"{_MAX_SAFETY_GENERATION_ATTEMPTS} full generation attempts: {exc}"
+                ) from exc
+            logger.warning(
+                "MarketCode quality validation rejected full generation attempt %d/%d: %s",
+                attempt,
+                _MAX_SAFETY_GENERATION_ATTEMPTS,
+                exc,
+            )
+            prompt = _quality_regeneration_prompt(entry, str(exc))
+            continue
 
     raise RuntimeError("MarketCode generation attempts were unexpectedly exhausted")
 

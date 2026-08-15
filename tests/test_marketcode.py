@@ -141,6 +141,40 @@ class MarketCodeGeneratorTests(unittest.TestCase):
         self.assertEqual(mock_call.call_count, 6)
 
     @patch("app.marketcode.generator._call_api")
+    def test_oversized_article_is_regenerated_from_scratch(self, mock_call):
+        oversized_body = " ".join(["длинная"] * 466)
+        valid_body = " ".join(["полезная"] * 360)
+        mock_call.side_effect = [
+            *((oversized_body, "test/model"),) * 5,
+            (valid_body, "test/model"),
+            (valid_body, "test/model"),
+        ]
+
+        result = _generate_sync(self.entry, self.settings)
+
+        self.assertGreaterEqual(result.word_count, 300)
+        self.assertLessEqual(result.word_count, 500)
+        self.assertEqual(mock_call.call_count, 7)
+        retry_prompt = mock_call.call_args_list[5].args[0]
+        self.assertIn("466 words", retry_prompt)
+        self.assertIn("заново с нуля", retry_prompt)
+        self.assertIn(self.entry.topic, retry_prompt)
+        self.assertIn(self.entry.goal, retry_prompt)
+
+    @patch("app.marketcode.generator._call_api")
+    def test_three_oversized_full_generations_return_controlled_error(self, mock_call):
+        oversized_body = " ".join(["длинная"] * 466)
+        mock_call.return_value = (oversized_body, "test/model")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "failed quality validation after 3 full generation attempts.*466 words",
+        ):
+            _generate_sync(self.entry, self.settings)
+
+        self.assertEqual(mock_call.call_count, 15)
+
+    @patch("app.marketcode.generator._call_api")
     def test_generation_rejects_forbidden_payment_guidance(self, mock_call):
         for forbidden_phrase in ("Киви", "WebMoney", "Яндекс.Деньги", "банковский перевод"):
             with self.subTest(forbidden_phrase=forbidden_phrase):
@@ -200,6 +234,19 @@ class MarketCodeRepositoryTests(unittest.TestCase):
 
 
 class MarketCodePublisherTests(unittest.IsolatedAsyncioTestCase):
+    def test_next_entry_keeps_the_100_day_plan_in_order(self):
+        with (
+            patch.object(marketcode_publisher, "published_days", return_value={1, 2, 3}),
+            patch.object(marketcode_publisher, "load_content_plan", return_value=load_content_plan()),
+        ):
+            self.assertEqual(marketcode_publisher._next_entry("MARKETCODE_CONTENT_PLAN.md").day, 4)
+
+        with (
+            patch.object(marketcode_publisher, "published_days", return_value={1, 2, 3, 4}),
+            patch.object(marketcode_publisher, "load_content_plan", return_value=load_content_plan()),
+        ):
+            self.assertEqual(marketcode_publisher._next_entry("MARKETCODE_CONTENT_PLAN.md").day, 5)
+
     async def test_vk_failure_does_not_block_other_channels(self):
         settings = MarketCodeSettings(
             enabled=True,
