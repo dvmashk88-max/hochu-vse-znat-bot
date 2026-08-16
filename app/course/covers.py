@@ -14,11 +14,35 @@ SAFE_MARGIN = 96
 TEXT_SAFE_MARGIN = 120
 MIN_TITLE_FONT = 38
 LESSON_ART_DIR = Path("assets/course/lesson_art")
+COVER_RENDERER_VERSION = "thematic-v2"
 
 PART_ACCENTS = {
     PartType.EXPLAIN: "#67F5D1",
     PartType.TRY: "#68C7FF",
     PartType.REINFORCE: "#B8A7FF",
+}
+
+THEME_RULES = (
+    ("reliability", ("ошиб", "галлюцин", "провер", "огранич", "безопас", "риск", "довер")),
+    ("automation", ("агент", "автомат", "процесс", "сценари", "цепоч", "workflow")),
+    ("vision", ("изображ", "картин", "визуал", "видео", "аудио", "голос")),
+    ("data", ("данн", "таблиц", "документ", "файл", "поиск", "анализ", "исслед")),
+    ("prompting", ("запрос", "инструкц", "промпт", "контекст", "формат", "уточн", "задач")),
+    ("language", ("язык", "текст", "токен", "модел", "перевод", "ответ")),
+    ("work", ("работ", "бизнес", "клиент", "продаж", "маркет", "команд")),
+    ("creativity", ("иде", "твор", "креатив", "контент", "дизайн")),
+)
+
+THEME_STYLES = {
+    "reliability": {"top": (44, 16, 67), "bottom": (10, 58, 86), "accent": "#FFCF5A", "labels": ("ПРОВЕРКА", "НАДЁЖНОСТЬ")},
+    "automation": {"top": (20, 17, 72), "bottom": (13, 94, 99), "accent": "#7DFFB2", "labels": ("СВЯЗИ", "АВТОМАТИЗАЦИЯ")},
+    "vision": {"top": (63, 16, 77), "bottom": (19, 64, 112), "accent": "#FF83DA", "labels": ("ОБРАЗ", "МУЛЬТИМЕДИА")},
+    "data": {"top": (8, 37, 66), "bottom": (8, 104, 111), "accent": "#63E9FF", "labels": ("ДАННЫЕ", "АНАЛИЗ")},
+    "prompting": {"top": (38, 18, 84), "bottom": (31, 70, 132), "accent": "#B99CFF", "labels": ("ИНСТРУКЦИЯ", "РЕЗУЛЬТАТ")},
+    "language": {"top": (8, 38, 77), "bottom": (15, 94, 119), "accent": "#67F5D1", "labels": ("ТЕКСТ", "СМЫСЛОВЫЕ СВЯЗИ")},
+    "work": {"top": (50, 24, 47), "bottom": (120, 54, 38), "accent": "#FFC857", "labels": ("ПРАКТИКА", "РАБОЧИЙ ПРОЦЕСС")},
+    "creativity": {"top": (64, 19, 83), "bottom": (29, 63, 116), "accent": "#FF8DD8", "labels": ("ИДЕЯ", "НОВЫЙ ВАРИАНТ")},
+    "learning": {"top": (12, 31, 67), "bottom": (25, 84, 104), "accent": "#72E6FF", "labels": ("ПОНЯТНО", "ШАГ ЗА ШАГОМ")},
 }
 
 FONT_CANDIDATES = {
@@ -196,28 +220,103 @@ def _draw_motif(draw: ImageDraw.ImageDraw, season: int, theme: dict[str, object]
             draw.line((*left, *right), fill=glow, width=7)
 
 
+def cover_theme_key(day: CourseDay) -> str:
+    context = " ".join((day.topic, day.short_title, day.learning_goal)).casefold()
+    for key, keywords in THEME_RULES:
+        if any(keyword in context for keyword in keywords):
+            return key
+    return "learning"
+
+
+def _thematic_background(day: CourseDay, part_type: PartType) -> Image.Image:
+    key = cover_theme_key(day)
+    style = THEME_STYLES[key]
+    image = Image.new("RGB", (SIZE, SIZE), style["top"])
+    draw = ImageDraw.Draw(image)
+    top, bottom = style["top"], style["bottom"]
+    for y in range(SIZE):
+        ratio = y / (SIZE - 1)
+        color = tuple(round(top[i] + (bottom[i] - top[i]) * ratio) for i in range(3))
+        draw.line((0, y, SIZE, y), fill=color)
+
+    accent = style["accent"]
+    part_accent = PART_ACCENTS[part_type]
+    for radius, width in ((430, 5), (330, 4), (235, 3)):
+        draw.ellipse((790 - radius, 510 - radius, 790 + radius, 510 + radius), outline=accent, width=width)
+    for x, y, radius in ((682, 165, 14), (1000, 260, 9), (930, 850, 18), (620, 760, 8)):
+        draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=part_accent)
+
+    if key == "language":
+        draw.rounded_rectangle((610, 250, 1010, 470), radius=48, fill=(7, 25, 55), outline=accent, width=8)
+        draw.polygon(((690, 470), (650, 535), (760, 470)), fill=(7, 25, 55))
+        for x, width in ((650, 96), (764, 128), (910, 68)):
+            draw.rounded_rectangle((x, 320, x + width, 376), radius=22, fill=part_accent)
+    elif key == "prompting":
+        draw.rounded_rectangle((610, 210, 1010, 650), radius=42, fill=(13, 20, 58), outline=accent, width=8)
+        for y, width in ((290, 290), (390, 220), (490, 320)):
+            draw.rounded_rectangle((660, y, 660 + width, y + 48), radius=20, outline=part_accent, width=6)
+            draw.ellipse((625, y + 11, 651, y + 37), fill=accent)
+    elif key == "reliability":
+        draw.polygon(((810, 190), (1010, 265), (980, 600), (810, 760), (640, 600), (610, 265)), fill=(13, 28, 61), outline=accent)
+        draw.line((705, 470, 785, 550, 930, 370), fill=part_accent, width=30, joint="curve")
+    elif key == "data":
+        draw.rounded_rectangle((620, 205, 990, 650), radius=38, fill=(7, 30, 55), outline=accent, width=7)
+        for index, height in enumerate((120, 210, 165, 270)):
+            x = 680 + index * 67
+            draw.rounded_rectangle((x, 580 - height, x + 40, 580), radius=14, fill=part_accent)
+        draw.ellipse((825, 245, 1015, 435), outline="#FFFFFF", width=14)
+        draw.line((970, 400, 1040, 475), fill="#FFFFFF", width=20)
+    elif key == "automation":
+        nodes = ((650, 300), (835, 210), (1000, 350), (870, 540), (660, 650))
+        for left, right in zip(nodes, (*nodes[1:], nodes[0])):
+            draw.line((*left, *right), fill=accent, width=10)
+        for index, (x, y) in enumerate(nodes):
+            radius = 42 if index else 56
+            draw.ellipse((x-radius, y-radius, x+radius, y+radius), fill=part_accent, outline="#FFFFFF", width=5)
+    elif key == "vision":
+        draw.rounded_rectangle((600, 210, 1020, 690), radius=54, fill=(17, 24, 61), outline=accent, width=8)
+        draw.ellipse((720, 300, 900, 480), outline=part_accent, width=20)
+        draw.ellipse((782, 362, 838, 418), fill="#FFFFFF")
+        draw.polygon(((640, 625), (760, 480), (835, 560), (920, 440), (990, 625)), fill=accent)
+    elif key == "work":
+        for index, height in enumerate((170, 250, 340)):
+            x = 650 + index * 105
+            draw.rounded_rectangle((x, 680-height, x+70, 680), radius=18, fill=part_accent)
+        draw.line((630, 700, 1010, 700), fill="#FFFFFF", width=8)
+        draw.line((690, 440, 830, 330, 995, 210), fill=accent, width=18, joint="curve")
+        draw.polygon(((995, 210), (930, 222), (980, 275)), fill=accent)
+    else:
+        draw.ellipse((655, 195, 965, 505), fill=(16, 27, 69), outline=accent, width=9)
+        draw.rounded_rectangle((730, 475, 890, 575), radius=28, fill=part_accent)
+        for angle_x, angle_y in ((610, 260), (580, 430), (1010, 270), (1040, 455), (810, 130)):
+            draw.line((810, 350, angle_x, angle_y), fill=accent, width=9)
+            draw.ellipse((angle_x-15, angle_y-15, angle_x+15, angle_y+15), fill="#FFFFFF")
+    return image
+
+
 def lesson_art_path(day: CourseDay) -> Path:
     return LESSON_ART_DIR / (
         f"season_{day.season_number:02d}_lesson_{day.lesson_number:02d}.jpg"
     )
 
 
-def _draw_illustrated_cover(image: Image.Image, day: CourseDay, part_type: PartType) -> Image.Image:
+def _draw_series_cover(image: Image.Image, day: CourseDay, part_type: PartType) -> Image.Image:
     image = image.convert("RGBA")
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     accent = PART_ACCENTS[part_type]
+    style = THEME_STYLES[cover_theme_key(day)]
 
     # The illustration remains the hero; this quiet panel guarantees readable
     # programmatic Cyrillic typography without baking text into generated art.
     draw.rounded_rectangle(
-        (54, 54, 548, SIZE - 54),
+        (54, 54, 574, SIZE - 54),
         radius=44,
         fill=(5, 14, 37, 232),
         outline=accent,
         width=3,
     )
-    draw.rounded_rectangle((84, 82, 518, 150), radius=24, fill=(12, 29, 61, 220))
+    draw.rounded_rectangle((84, 82, 544, 150), radius=24, fill=(12, 29, 61, 220))
     draw.text((108, 101), "ХОЧУ ВСЁ ЗНАТЬ — ИИ", font=_font(27, True), fill="#FFFFFF")
     draw.text((108, 164), "УЧИМСЯ КАЖДЫЙ ДЕНЬ", font=_font(20, True), fill=accent)
 
@@ -226,18 +325,18 @@ def _draw_illustrated_cover(image: Image.Image, day: CourseDay, part_type: PartT
     draw.text((108, 272), day_line, font=_font(27, True), fill="#FFFFFF")
 
     title_font_size = 48
-    title_lines = _wrap(draw, day.short_title.upper(), _font(title_font_size, True), 382)
+    title_lines = _wrap(draw, day.short_title.upper(), _font(title_font_size, True), 408)
     while len(title_lines) > 3 and title_font_size > 38:
         title_font_size -= 2
-        title_lines = _wrap(draw, day.short_title.upper(), _font(title_font_size, True), 382)
+        title_lines = _wrap(draw, day.short_title.upper(), _font(title_font_size, True), 408)
     title_y = 365
     for line in title_lines:
         draw.text((108, title_y), line, font=_font(title_font_size, True), fill="#FFFFFF")
         title_y += title_font_size + 17
 
-    draw.line((108, 570, 490, 570), fill=(103, 245, 209, 95), width=2)
-    draw.text((108, 600), "ТОКЕНЫ  •  КОНТЕКСТ", font=_font(20, True), fill="#CFE5FF")
-    draw.text((108, 634), "•  ВЕРОЯТНОСТЬ", font=_font(20, True), fill="#CFE5FF")
+    draw.line((108, 570, 516, 570), fill=(103, 245, 209, 95), width=2)
+    draw.text((108, 600), style["labels"][0], font=_font(20, True), fill="#CFE5FF")
+    draw.text((108, 634), style["labels"][1], font=_font(20, True), fill=style["accent"])
 
     part_number = {
         PartType.EXPLAIN: "ЧАСТЬ 1 ИЗ 3",
@@ -245,11 +344,11 @@ def _draw_illustrated_cover(image: Image.Image, day: CourseDay, part_type: PartT
         PartType.REINFORCE: "ЧАСТЬ 3 ИЗ 3",
     }[part_type]
     draw.text((108, 796), part_number, font=_font(20, True), fill="#B8C8E8")
-    draw.rounded_rectangle((88, 842, 514, 958), radius=32, fill=accent)
+    draw.rounded_rectangle((88, 842, 540, 958), radius=32, fill=accent)
     label = part_type.public_name
     label_font = _font(32, True)
     label_box = draw.textbbox((0, 0), label, font=label_font)
-    label_x = 301 - (label_box[2] - label_box[0]) / 2
+    label_x = 314 - (label_box[2] - label_box[0]) / 2
     label_y = 900 - (label_box[3] - label_box[1]) / 2 - label_box[1]
     draw.text((label_x, label_y), label, font=label_font, fill="#08152F")
 
@@ -258,52 +357,17 @@ def _draw_illustrated_cover(image: Image.Image, day: CourseDay, part_type: PartT
 
 def render_cover(day: CourseDay, part_type: PartType,
                  base_path: str | Path | None = None) -> tuple[bytes, str]:
-    theme = SEASON_THEMES.get(day.season_number)
-    if not theme:
+    if day.season_number not in SEASON_THEMES:
         raise ValueError(f"No production course theme for season {day.season_number}")
-    illustrated = False
-    if base_path is not None:
-        path = Path(base_path)
-    else:
-        candidate = lesson_art_path(day)
-        if candidate.exists():
-            path = candidate
-            illustrated = True
-        else:
-            path = Path(f"assets/course/season_{day.season_number:02d}_base.png")
-    if path.exists():
+    candidate = Path(base_path) if base_path is not None else lesson_art_path(day)
+    path = candidate if candidate.exists() else None
+    if path is not None:
         image = Image.open(path).convert("RGB").resize((SIZE, SIZE))
     else:
-        image = _gradient(theme)
-
-    if illustrated:
-        image = _draw_illustrated_cover(image, day, part_type)
-        output = io.BytesIO()
-        image.save(output, format="JPEG", quality=90, optimize=True, progressive=False, subsampling=1)
-        content = output.getvalue()
-        return content, hashlib.sha256(content).hexdigest()
-
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle(
-        (SAFE_MARGIN, SAFE_MARGIN, SIZE - SAFE_MARGIN, SIZE - SAFE_MARGIN),
-        radius=46, outline=theme["glow"], width=5, fill="#10152F",
-    )
-    _draw_motif(draw, day.season_number, theme)
-    layout = cover_layout(day, part_type)
-    colors = {
-        "brand": "#FFFFFF", "subtitle": theme["accent"], "season": "#C9D5FF",
-        "day": "#FFFFFF", "part": "#10152F",
-    }
-    for placement in layout.placements:
-        if placement.name == "part":
-            draw.rounded_rectangle((130, 790, SIZE - 130, 940), radius=38, fill=theme["accent"])
-        color = colors.get(placement.name, "#FFFFFF")
-        draw.text(
-            placement.position, placement.text,
-            font=_font(placement.font_size, placement.name not in {"season"}), fill=color,
-        )
+        image = _thematic_background(day, part_type)
+    image = _draw_series_cover(image, day, part_type)
 
     output = io.BytesIO()
-    image.save(output, format="JPEG", quality=88, optimize=True, progressive=False, subsampling=1)
+    image.save(output, format="JPEG", quality=90, optimize=True, progressive=False, subsampling=1)
     content = output.getvalue()
     return content, hashlib.sha256(content).hexdigest()

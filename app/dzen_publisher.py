@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +22,10 @@ STORAGE_DIR = Path("storage")
 COOKIES_FILE = STORAGE_DIR / "dzen_cookies.json"
 DEBUG_DIR = Path(DZEN_DEBUG_DIR)
 DZEN_OPEN_RETRIES = 3
+
+
+class DzenPublishAmbiguousError(RuntimeError):
+    """The final publish action was sent, but Dzen did not confirm its outcome."""
 
 
 def _log_step(message: str) -> None:
@@ -583,110 +588,6 @@ async def _wait_image_uploaded(page) -> bool:
     return True
 
 
-async def _click_publish_fallback_button(page, label: str, pattern: str) -> bool:
-    clicked = await page.evaluate(
-        """
-        ({ label, pattern }) => {
-            const re = new RegExp(pattern, 'i');
-            const isVisible = (el) => {
-                const style = window.getComputedStyle(el);
-                const rect = el.getBoundingClientRect();
-                return style.visibility !== 'hidden'
-                    && style.display !== 'none'
-                    && rect.width > 0
-                    && rect.height > 0;
-            };
-            const isEnabled = (el) => !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-            const textOf = (el) => [
-                el.innerText,
-                el.textContent,
-                el.getAttribute('aria-label'),
-                el.getAttribute('title'),
-                el.getAttribute('data-testid'),
-                el.getAttribute('class'),
-            ].filter(Boolean).join(' ');
-
-            const controls = Array.from(document.querySelectorAll('button, [role="button"]'))
-                .filter((el) => isVisible(el) && isEnabled(el));
-
-            let target = controls.find((el) => re.test(textOf(el)));
-            if (!target) {
-                const width = window.innerWidth || document.documentElement.clientWidth;
-                const height = window.innerHeight || document.documentElement.clientHeight;
-                const positioned = controls
-                    .map((el) => ({ el, rect: el.getBoundingClientRect(), text: textOf(el) }))
-                    .filter(({ rect }) => (
-                        rect.x > width * 0.55
-                        && (rect.y < 180 || rect.y > height - 220)
-                        && rect.width >= 20
-                        && rect.height >= 20
-                    ))
-                    .sort((a, b) => (b.rect.x + b.rect.y) - (a.rect.x + a.rect.y));
-                target = positioned[0]?.el;
-            }
-
-            if (!target) {
-                return false;
-            }
-            target.click();
-            return true;
-        }
-        """,
-        {"label": label, "pattern": pattern},
-    )
-    if clicked:
-        logger.info("  Clicked %s by JS fallback", label)
-        print(f"  OK: {label}")
-        return True
-    return False
-
-
-async def _click_visible_button_by_text(page, label: str, pattern: str) -> bool:
-    clicked = await page.evaluate(
-        """
-        ({ pattern }) => {
-            const re = new RegExp(pattern, 'i');
-            const isVisible = (el) => {
-                const style = window.getComputedStyle(el);
-                const rect = el.getBoundingClientRect();
-                return style.visibility !== 'hidden'
-                    && style.display !== 'none'
-                    && rect.width > 0
-                    && rect.height > 0;
-            };
-            const isEnabled = (el) => !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-            const textOf = (el) => [
-                el.innerText,
-                el.textContent,
-                el.getAttribute('aria-label'),
-                el.getAttribute('title'),
-            ].filter(Boolean).join(' ').replace(/\\s+/g, ' ').trim();
-
-            const buttons = Array.from(document.querySelectorAll('button, [role="button"]'))
-                .filter((el) => isVisible(el) && isEnabled(el) && re.test(textOf(el)))
-                .map((el) => ({ el, rect: el.getBoundingClientRect() }))
-                .sort((a, b) => (b.rect.width * b.rect.height) - (a.rect.width * a.rect.height));
-
-            const target = buttons[0]?.el;
-            if (!target) {
-                return false;
-            }
-            target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-            target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-            target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-            target.click();
-            return true;
-        }
-        """,
-        {"pattern": pattern},
-    )
-    if clicked:
-        print(f"  OK: {label}")
-        logger.info("  Clicked %s by visible text JS", label)
-        return True
-    return False
-
-
 async def _wait_dzen_autosave(page) -> None:
     try:
         await page.wait_for_function(
@@ -883,27 +784,120 @@ async def _editor_contains_text(page, text: str) -> bool:
     return expected in body_text
 
 
-async def _published_or_left_editor(page) -> bool:
-    try:
-        await page.wait_for_url(lambda url: "/editor/" not in url and "/profile/editor/" not in url, timeout=15000)
-        return True
-    except Exception:
-        pass
+def _is_public_dzen_url(value: object) -> bool:
+    path = urlparse(str(value)).path.lower()
+    return bool(path and "/editor/" not in path and "/profile/editor/" not in path)
 
-    for loc in [
-        page.get_by_text("опублик", exact=False),
-        page.get_by_text("публикация создана", exact=False),
-        page.get_by_text("статья опубликована", exact=False),
-    ]:
+
+async def _published_article_is_visible(page, title: str) -> bool:
+    """Confirm a public article, never merely a navigation away from the editor."""
+    expected = " ".join(title.split()).casefold()
+    try:
+        await page.wait_for_function(
+            """
+            ({ expected }) => {
+                const path = window.location.pathname.toLowerCase();
+                if (path.includes('/editor/') || path.includes('/profile/editor/')) {
+                    return false;
+                }
+                const text = (document.body?.innerText || '')
+                    .replace(/\\s+/g, ' ')
+                    .trim()
+                    .toLocaleLowerCase('ru-RU');
+                const publicArticleMarker = document.querySelector([
+                    'article',
+                    '[data-testid="article-content"]',
+                    '[data-testid="article-footer-three-dots"]',
+                    '[data-testid="card-article-title-link"]'
+                ].join(','));
+                return Boolean(publicArticleMarker) && text.includes(expected);
+            }
+            """,
+            {"expected": expected},
+            timeout=20000,
+        )
+        return _is_public_dzen_url(page.url)
+    except Exception:
+        return False
+
+
+async def _click_final_article_publish(page) -> None:
+    """Click Dzen's exact article control and reject comment-publish controls."""
+    selectors = (
+        '[role="dialog"] [data-testid="publish-btn"]',
+        '[data-testid*="publication" i] [data-testid="publish-btn"]',
+        '[data-testid="publish-btn"]',
+    )
+    for selector in selectors:
+        locator = page.locator(selector)
         try:
-            if await loc.first.is_visible(timeout=1200):
-                return True
+            count = await locator.count()
         except Exception:
             continue
-    return False
+        for index in range(count):
+            candidate = locator.nth(index)
+            try:
+                if not await candidate.is_visible(timeout=1200):
+                    continue
+                if await candidate.is_disabled(timeout=700):
+                    continue
+                is_comment_control = await candidate.evaluate(
+                    """
+                    (el) => Boolean(el.closest([
+                        '[data-testid*="comment-form" i]',
+                        '[data-testid*="comment-editor" i]',
+                        '[class*="CommentForm"]',
+                        '[class*="comment-form"]'
+                    ].join(',')))
+                    """
+                )
+                if is_comment_control:
+                    logger.warning("Ignored comment publish control while publishing Dzen article")
+                    continue
+                label = " ".join((await candidate.inner_text()).split())
+                if not re.fullmatch(r"Опубликовать(?: сейчас)?", label, re.IGNORECASE):
+                    continue
+            except Exception:
+                continue
+            try:
+                await candidate.click(timeout=5000)
+            except Exception as exc:
+                raise DzenPublishAmbiguousError(
+                    f"Финальный Dzen publish-click завершился неоднозначно: {exc}"
+                ) from exc
+            logger.info("  Clicked exact Dzen article publish control: %s", selector)
+            return
+    await _save_debug_screenshot(page, "missing_exact_article_publish")
+    await _log_visible_controls(page, "missing exact article publish")
+    raise RuntimeError("Точная кнопка публикации статьи Дзена не найдена")
 
 
-async def _auto_publish_article(page) -> None:
+async def _open_article_publish_settings(page) -> None:
+    """Open article settings through editor-specific controls only."""
+    candidates = (
+        page.locator('[data-testid="article-publish-btn"]'),
+        page.locator('[data-testid="article-next-btn"]'),
+        page.get_by_role("button", name="Далее", exact=True),
+        page.get_by_role("button", name="Продолжить", exact=True),
+    )
+    for locator in candidates:
+        try:
+            candidate = locator.first
+            if not await candidate.is_visible(timeout=1500):
+                continue
+            if await candidate.is_disabled(timeout=700):
+                continue
+            await candidate.click(timeout=5000)
+            logger.info("  Opened Dzen article publication settings with exact control")
+            return
+        except Exception:
+            continue
+    await _save_debug_screenshot(page, "missing_article_publish_settings")
+    await _log_visible_controls(page, "missing article publish settings")
+    raise RuntimeError("Точная кнопка перехода к настройкам статьи Дзена не найдена")
+
+
+async def _auto_publish_article(page, title: str) -> None:
     _log_step("Автопубликация Дзена включена")
     await _dismiss_editor_popups(page)
     await _save_debug_screenshot(page, "before_dzen_next")
@@ -912,47 +906,7 @@ async def _auto_publish_article(page) -> None:
     await _wait_dzen_autosave(page)
 
     _log_step("Нажимаю переход к настройкам публикации")
-    if not await _click_visible_button_by_text(
-        page,
-        "кнопка перехода к настройкам публикации",
-        "далее|продолжить|опубликовать",
-    ):
-        try:
-            await _click_first_enabled([
-                page.get_by_role("button", name="Далее", exact=True),
-                page.get_by_role("button", name="Далее", exact=False),
-                page.get_by_role("button", name="Продолжить", exact=True),
-                page.get_by_role("button", name="Продолжить", exact=False),
-                page.get_by_role("button", name="Опубликовать", exact=True),
-                page.get_by_role("button", name="Опубликовать", exact=False),
-                page.get_by_label("Далее", exact=False),
-                page.get_by_label("Продолжить", exact=False),
-                page.get_by_label("Опубликовать", exact=False),
-                page.locator('button:has-text("Далее")'),
-                page.locator('[role="button"]:has-text("Далее")'),
-                page.locator('button:has-text("Продолжить")'),
-                page.locator('[role="button"]:has-text("Продолжить")'),
-                page.locator('button:has-text("Опубликовать")'),
-                page.locator('[role="button"]:has-text("Опубликовать")'),
-                page.locator('button[aria-label*="далее" i]'),
-                page.locator('[role="button"][aria-label*="далее" i]'),
-                page.locator('button[title*="далее" i]'),
-                page.locator('[role="button"][title*="далее" i]'),
-                page.locator('button[aria-label*="next" i]'),
-                page.locator('[role="button"][aria-label*="next" i]'),
-                page.locator('button[title*="next" i]'),
-                page.locator('[role="button"][title*="next" i]'),
-                page.locator('[data-testid*="next" i]'),
-                page.locator('[data-testid*="publish" i] button').last,
-                page.locator('button[type="submit"]').last,
-            ], "кнопка перехода к настройкам публикации")
-        except RuntimeError:
-            if not await _click_publish_fallback_button(
-                page,
-                "кнопка перехода к настройкам публикации",
-                "далее|продолж|next|publish|публик|arrow|submit",
-            ):
-                raise
+    await _open_article_publish_settings(page)
 
     try:
         await page.wait_for_load_state("networkidle", timeout=15000)
@@ -963,82 +917,42 @@ async def _auto_publish_article(page) -> None:
     await _save_debug_screenshot(page, "before_dzen_publish")
     await _log_visible_controls(page, "before publish")
 
-    _log_step("Нажимаю Опубликовать")
-    if not await _click_visible_button_by_text(
-        page,
-        "финальная кнопка «Опубликовать»",
-        "опубликовать|разместить",
-    ):
-        try:
-            await _click_first_enabled([
-                page.get_by_role("button", name="Опубликовать", exact=True),
-                page.get_by_role("button", name="Опубликовать", exact=False),
-                page.get_by_role("button", name="Опубликовать сейчас", exact=False),
-                page.get_by_role("button", name="Разместить", exact=False),
-                page.get_by_label("Опубликовать", exact=False),
-                page.get_by_label("Разместить", exact=False),
-                page.locator('button:has-text("Опубликовать")'),
-                page.locator('[role="button"]:has-text("Опубликовать")'),
-                page.locator('button:has-text("Разместить")'),
-                page.locator('[role="button"]:has-text("Разместить")'),
-                page.locator('button[aria-label*="публик" i]'),
-                page.locator('[role="button"][aria-label*="публик" i]'),
-                page.locator('button[title*="публик" i]'),
-                page.locator('[role="button"][title*="публик" i]'),
-                page.locator('button[aria-label*="размест" i]'),
-                page.locator('[role="button"][aria-label*="размест" i]'),
-                page.locator('button[title*="размест" i]'),
-                page.locator('[role="button"][title*="размест" i]'),
-                page.locator('[data-testid*="publish" i]'),
-                page.locator('button[type="submit"]').last,
-                page.locator('footer button').last,
-                page.locator('[class*="footer" i] button').last,
-                page.locator('[class*="publish" i] button').last,
-            ], "финальная кнопка «Опубликовать»")
-        except RuntimeError:
-            if not await _click_publish_fallback_button(
-                page,
-                "финальная кнопка «Опубликовать»",
-                "опубликов|размест|publish|submit",
-            ):
-                raise
+    _log_step("Нажимаю точную кнопку публикации статьи")
+    await _click_final_article_publish(page)
 
     try:
-        await page.wait_for_load_state("networkidle", timeout=15000)
-    except Exception:
-        await page.wait_for_timeout(2000)
-
-    for loc in [
-        page.get_by_role("button", name="Всё равно опубликовать", exact=False),
-        page.get_by_role("button", name="Подтвердить", exact=False),
-        page.get_by_role("button", name="Продолжить", exact=False),
-        page.locator('button:has-text("Всё равно опубликовать")'),
-        page.locator('button:has-text("Подтвердить")'),
-        page.locator('button:has-text("Продолжить")'),
-    ]:
         try:
-            el = loc.first if hasattr(loc, "first") else loc
-            if await el.is_visible(timeout=1200):
-                await el.click(timeout=2000, force=True)
-                logger.info("  Clicked extra publish confirmation")
-                break
+            await page.wait_for_load_state("networkidle", timeout=15000)
         except Exception:
-            continue
+            await page.wait_for_timeout(2000)
 
-    if not await _published_or_left_editor(page):
-        if await _click_publish_fallback_button(
-            page,
-            "финальная кнопка «Опубликовать»",
-            "опубликов|размест|publish|submit",
-        ) and await _published_or_left_editor(page):
+        for loc in [
+            page.get_by_role("button", name="Всё равно опубликовать", exact=False),
+            page.get_by_role("button", name="Подтвердить", exact=False),
+        ]:
+            try:
+                el = loc.first if hasattr(loc, "first") else loc
+                if await el.is_visible(timeout=1200):
+                    await el.click(timeout=2000, force=True)
+                    logger.info("  Clicked extra publish confirmation")
+                    break
+            except Exception:
+                continue
+
+        if await _published_article_is_visible(page, title):
             _log_step("Статья опубликована в Дзене")
             return
-
         await _save_debug_screenshot(page, "dzen_publish_not_confirmed")
         await _log_visible_controls(page, "publish not confirmed")
-        raise RuntimeError("После клика по публикации статья осталась в редакторе Дзена")
-
-    _log_step("Статья опубликована в Дзене")
+        raise DzenPublishAmbiguousError(
+            "Dzen принял финальный publish-click, но публичная статья не подтверждена"
+        )
+    except DzenPublishAmbiguousError:
+        raise
+    except Exception as exc:
+        raise DzenPublishAmbiguousError(
+            f"Dzen принял финальный publish-click; результат неоднозначен: {exc}"
+        ) from exc
 
 
 async def publish_draft(
@@ -1134,7 +1048,7 @@ async def publish_draft(
                 _log_step("Черновик Дзена создан")
                 return "draft"
 
-            await _auto_publish_article(page)
+            await _auto_publish_article(page, title)
             return "published"
         finally:
             await browser.close()

@@ -13,11 +13,13 @@ from PIL import Image
 from app import bot as bot_module
 from app.course import repository
 from app.course.covers import (
+    COVER_RENDERER_VERSION,
     FONT_CANDIDATES,
     SAFE_MARGIN,
     SIZE,
     cover_layout,
     cover_metadata,
+    cover_theme_key,
     lesson_art_path,
     render_cover,
 )
@@ -27,8 +29,9 @@ from app.course.models import CoursePart, GeneratedLesson, PartType, RetrievedSo
 from app.course.quality import LIMITS, LessonQualityError, validate_parts
 from app.course.reconciliation import decide_reconciliation
 from app.course.repository import StoredPart
-from app.course.service import _publish_platform, _telegram, publish_lesson_part
+from app.course.service import _publish_platform, _telegram, publish_lesson_part, rebuild_prepared_lesson_covers
 from app.course.sources import SourceRetrievalError, SourceRetriever
+from app.dzen_publisher import DzenPublishAmbiguousError
 from app.database import Database, UnsupportedDatabaseURL, parse_database_url
 from app import db as legacy_db
 from app.marketcode.config import MarketCodeSettings
@@ -189,6 +192,24 @@ class DatabaseTests(unittest.TestCase):
                     conn.execute("UPDATE platform_publications SET updated_at='2000-01-01 00:00:00'")
                 self.assertEqual(repository.recover_stale_work(30)[0], 1)
                 self.assertTrue(repository.claim_publication(lesson, PartType.EXPLAIN, "telegram", "time"))
+
+    def test_stale_dzen_claim_becomes_non_retryable_ambiguous(self):
+        lesson = load_curriculum(CURRICULUM).lessons[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(f"sqlite:///{Path(tmp) / 'course.db'}")
+            with patch.object(repository, "database", db):
+                self.assertTrue(repository.claim_publication(lesson, PartType.EXPLAIN, "dzen", "time"))
+                with db.connect() as conn:
+                    conn.execute("UPDATE platform_publications SET updated_at='2000-01-01 00:00:00'")
+                self.assertEqual(repository.recover_stale_work(30)[0], 1)
+                self.assertEqual(
+                    repository.publication_statuses(lesson, PartType.EXPLAIN)["dzen"],
+                    "ambiguous",
+                )
+                self.assertEqual(
+                    repository.claim_publication(lesson, PartType.EXPLAIN, "dzen", "time"),
+                    0,
+                )
 
     def test_needs_review_is_not_automatically_regenerated(self):
         lesson = load_curriculum(CURRICULUM).lessons[0]
@@ -540,6 +561,47 @@ class CoverTests(unittest.TestCase):
             with Image.open(__import__("io").BytesIO(content)) as image:
                 self.assertEqual(image.size, (SIZE, SIZE))
 
+    def test_missing_manual_art_uses_topic_specific_renderer(self):
+        catalog = load_curriculum_catalog(CURRICULUM_DIR)
+        lesson_03 = catalog.day_for_date(date(2026, 8, 16))
+        lesson_04 = catalog.day_for_date(date(2026, 8, 17))
+        self.assertFalse(lesson_art_path(lesson_03).exists())
+        self.assertFalse(lesson_art_path(lesson_04).exists())
+        self.assertNotEqual(cover_theme_key(lesson_03), cover_theme_key(lesson_04))
+        self.assertNotEqual(
+            render_cover(lesson_03, PartType.EXPLAIN)[1],
+            render_cover(lesson_04, PartType.EXPLAIN)[1],
+        )
+        self.assertEqual(COVER_RENDERER_VERSION, "thematic-v2")
+
+    def test_cover_only_rebuild_preserves_text_and_blocks_started_lessons(self):
+        lesson = load_curriculum(CURRICULUM).lessons[0]
+        generated = GeneratedLesson(
+            lesson,
+            tuple(CoursePart(part, part.public_name, f"text-{part.value}") for part in PartType),
+            "model",
+            (lesson.sources[0].url,),
+        )
+        source = RetrievedSource(lesson.sources[0], "source", "source-hash")
+        old_artifacts = {
+            part: (f"old-{part.value}", "old-hash", b"old") for part in PartType
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(f"sqlite:///{Path(tmp) / 'course.db'}")
+            with patch.object(repository, "database", db):
+                repository.save_generated_lesson(generated, (source,), old_artifacts)
+                rebuild_prepared_lesson_covers(lesson)
+                rebuilt = repository.load_part(lesson, PartType.EXPLAIN)
+                self.assertEqual(rebuilt.text, "text-explain")
+                self.assertIn(f"renderer={COVER_RENDERER_VERSION}", rebuilt.image_reference)
+                repository.claim_publication(lesson, PartType.EXPLAIN, "telegram", "time")
+                with self.assertRaises(repository.CoverRebuildError):
+                    rebuild_prepared_lesson_covers(lesson)
+                rebuild_prepared_lesson_covers(lesson, (PartType.REINFORCE,))
+                reinforce = repository.load_part(lesson, PartType.REINFORCE)
+                self.assertEqual(reinforce.text, "text-reinforce")
+                self.assertIn(f"renderer={COVER_RENDERER_VERSION}", reinforce.image_reference)
+
     def test_special_cover_has_no_fake_lesson_16_of_15(self):
         special = load_curriculum_catalog(CURRICULUM_DIR).special_day_for_date(date(2026, 8, 29))
         metadata = " ".join(cover_metadata(special))
@@ -659,6 +721,35 @@ class PublisherContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(finish.call_count, 4)
         self.assertEqual(finish.call_args_list[0].kwargs["status"], "failed")
         self.assertTrue(all(call.kwargs["status"] == "published" for call in finish.call_args_list[1:]))
+
+    async def test_ambiguous_dzen_result_is_not_saved_as_retryable_failure(self):
+        lesson = load_curriculum(CURRICULUM).lessons[0]
+        part = StoredPart(
+            lesson.season_id, lesson.course_id, lesson.lesson_id, lesson.date,
+            PartType.EXPLAIN, "РАЗБИРАЕМ", "text", "ref", "hash", b"image",
+        )
+        results = AsyncMock(side_effect=[
+            "telegram", "max", "vk", DzenPublishAmbiguousError("unknown"),
+        ])
+        with (
+            patch("app.course.service.curriculum") as plan,
+            patch("app.course.service.prepare_lesson", new=AsyncMock(return_value=True)),
+            patch("app.course.service.load_part", return_value=part),
+            patch("app.course.service.hashlib.sha256") as sha,
+            patch("app.course.service.claim_publication", return_value=1),
+            patch("app.course.service._publish_platform", results),
+            patch("app.course.service.finish_publication") as finish,
+            patch("app.course.service.publication_statuses", return_value={}),
+            patch("app.course.service.send_admin_alert", new=AsyncMock(return_value=True)) as alert,
+        ):
+            plan.return_value.day_for_date.return_value = lesson
+            sha.return_value.hexdigest.return_value = "hash"
+            await publish_lesson_part(PartType.EXPLAIN, target_date=lesson.date)
+        self.assertEqual(finish.call_args_list[-1].kwargs["status"], "ambiguous")
+        sent = alert.await_args.args[0]
+        self.assertEqual(sent.alert_type, "dzen_publication_ambiguous")
+        self.assertIn("Платформа: dzen", sent.message)
+        self.assertIn("Статус: ambiguous", sent.message)
 
     async def test_special_day_uses_same_publication_orchestrator(self):
         special = load_curriculum_catalog(CURRICULUM_DIR).special_day_for_date(date(2026, 8, 31))

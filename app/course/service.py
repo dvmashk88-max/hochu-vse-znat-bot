@@ -14,7 +14,7 @@ from app.config import (
     TELEGRAM_CHANNEL_ID,
 )
 from app.course.alerts import lesson_alert, send_admin_alert, system_alert
-from app.course.covers import render_cover
+from app.course.covers import COVER_RENDERER_VERSION, render_cover
 from app.course.curriculum import CurriculumCatalog, load_curriculum_catalog
 from app.course.generator import CourseGenerationError, generate_lesson
 from app.course.models import CourseDay, PartType
@@ -28,11 +28,12 @@ from app.course.repository import (
     mark_missed,
     publication_statuses,
     recent_reinforce_texts,
+    replace_prepared_lesson_covers,
     save_generated_lesson,
     save_generation_failure,
 )
 from app.course.sources import SourceRetrievalError, SourceRetriever
-from app.dzen_publisher import publish_draft
+from app.dzen_publisher import DzenPublishAmbiguousError, publish_draft
 from app.max_publisher import publish_to_max
 from app.vk_publisher import publish_to_vk
 
@@ -42,6 +43,30 @@ PLATFORMS = ("telegram", "max", "vk", "dzen")
 
 def curriculum() -> CurriculumCatalog:
     return load_curriculum_catalog(COURSE_CURRICULUM_PATH)
+
+
+def _cover_artifacts(
+    lesson: CourseDay,
+    part_types: tuple[PartType, ...] = tuple(PartType),
+) -> dict[PartType, tuple[str, str, bytes]]:
+    artifacts = {}
+    for part_type in part_types:
+        image_bytes, image_hash = render_cover(lesson, part_type)
+        artifacts[part_type] = (
+            f"course-cover://{lesson.season_id}/{lesson.course_id}/{lesson.lesson_id}/"
+            f"{part_type.value}?renderer={COVER_RENDERER_VERSION}",
+            image_hash,
+            image_bytes,
+        )
+    return artifacts
+
+
+def rebuild_prepared_lesson_covers(
+    lesson: CourseDay,
+    part_types: tuple[PartType, ...] = tuple(PartType),
+) -> None:
+    """Re-render stored images without regenerating or rewriting lesson text."""
+    replace_prepared_lesson_covers(lesson, _cover_artifacts(lesson, part_types))
 
 
 async def prepare_lesson(lesson: CourseDay, retriever: SourceRetriever | None = None) -> bool:
@@ -115,14 +140,7 @@ async def prepare_lesson(lesson: CourseDay, retriever: SourceRetriever | None = 
             sources,
             previous_reinforce_texts=recent_reinforce_texts(lesson),
         )
-        artifacts = {}
-        for part_type in PartType:
-            image_bytes, image_hash = render_cover(lesson, part_type)
-            artifacts[part_type] = (
-                f"course-cover://{lesson.season_id}/{lesson.course_id}/{lesson.lesson_id}/{part_type.value}",
-                image_hash,
-                image_bytes,
-            )
+        artifacts = _cover_artifacts(lesson)
         save_generated_lesson(generated, sources, artifacts)
     except SourceRetrievalError as exc:
         try:
@@ -237,6 +255,24 @@ async def publish_lesson_part(part_type: PartType, *, target_date: date | None =
         )
         try:
             result = await _publish_platform(platform, lesson, part_type, part.title, part.text, image)
+        except DzenPublishAmbiguousError as exc:
+            try:
+                finish_publication(lesson, part_type, platform, status="ambiguous", error=str(exc))
+            except Exception:
+                logger.exception("Cannot persist ambiguous Dzen result")
+            logger.error(
+                "Course Dzen result is ambiguous and will not be retried automatically: "
+                "lesson=%s part=%s error=%s",
+                lesson.lesson_id, part_type.value, exc,
+            )
+            await send_admin_alert(lesson_alert(
+                "dzen_publication_ambiguous",
+                lesson,
+                "ambiguous",
+                str(exc),
+                part_type,
+                platform="dzen",
+            ))
         except Exception as exc:
             try:
                 finish_publication(lesson, part_type, platform, status="failed", error=str(exc))

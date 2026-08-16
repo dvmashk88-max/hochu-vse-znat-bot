@@ -12,7 +12,7 @@ from app.db import (
     save_vk_publication_status,
 )
 from app.config import TELEGRAM_CHANNEL_ID
-from app.dzen_publisher import publish_draft
+from app.dzen_publisher import DzenPublishAmbiguousError, publish_draft
 from app.max_publisher import publish_to_max
 from app.vk_publisher import publish_to_vk
 
@@ -74,6 +74,9 @@ async def publish_next_post() -> None:
 
     try:
         dzen_status = await publish_draft(title=topic, text=text, image_bytes=image_bytes)
+    except DzenPublishAmbiguousError as e:
+        save_dzen_publication_status(topic, "ambiguous", str(e))
+        logger.error("Dzen publication requires manual verification: %s", e)
     except Exception as e:
         save_dzen_publication_status(topic, "failed", str(e))
         logger.error("Failed to create Dzen draft: %s", e)

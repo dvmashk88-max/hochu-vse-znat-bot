@@ -21,7 +21,7 @@ class AdminAlert:
 
 
 def lesson_alert(alert_type: str, day: CourseDay, status: str, error: str,
-                 part_type: PartType | None = None) -> AdminAlert:
+                 part_type: PartType | None = None, platform: str | None = None) -> AdminAlert:
     part = f":{part_type.value}" if part_type else ""
     key = f"{alert_type}:{day.date.isoformat()}:{day.lesson_id}{part}"
     course = day.course_title if day.day_type == "lesson" else day.cover_label
@@ -30,14 +30,20 @@ def lesson_alert(alert_type: str, day: CourseDay, status: str, error: str,
         if day.day_type == "lesson" else day.lesson_id
     )
     part_line = f"\nЧасть: {part_type.public_name}" if part_type else ""
-    heading = "ошибка публикации части" if alert_type == "all_platforms_failed" else "ошибка подготовки урока"
+    platform_line = f"\nПлатформа: {platform}" if platform else ""
+    if alert_type == "all_platforms_failed":
+        heading = "ошибка публикации части"
+    elif alert_type == "dzen_publication_ambiguous":
+        heading = "неоднозначный результат публикации в Дзен"
+    else:
+        heading = "ошибка подготовки урока"
     message = (
         f"⚠️ Хочу всё знать — {heading}\n"
         f"Дата: {day.date.isoformat()}\n"
         f"Сезон: {day.season_number}\n"
         f"Курс: {course}\n"
         f"Урок: {lesson}\n"
-        f"Тема: {day.topic}{part_line}\n"
+        f"Тема: {day.topic}{part_line}{platform_line}\n"
         f"Статус: {status}\n"
         f"Краткая ошибка: {error[:700]}"
     )

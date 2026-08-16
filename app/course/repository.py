@@ -21,6 +21,10 @@ class StoredPart:
     image_bytes: bytes
 
 
+class CoverRebuildError(RuntimeError):
+    pass
+
+
 def _date_value(value: date):
     return value.isoformat() if database.config.backend == "sqlite" else value
 
@@ -173,6 +177,43 @@ def load_part(lesson: CourseDay, part_type: PartType) -> StoredPart | None:
                       row[5], row[6], row[7], row[8], bytes(row[9]))
 
 
+def replace_prepared_lesson_covers(
+    lesson: CourseDay,
+    image_artifacts: dict[PartType, tuple[str, str, bytes]],
+) -> None:
+    """Replace only image fields for an unstarted prepared lesson."""
+    requested = set(image_artifacts)
+    if not requested or not requested.issubset(set(PartType)):
+        raise CoverRebuildError("Cover rebuild requires at least one valid course part")
+    init_course_storage()
+    with database.connect(immediate=True) as conn:
+        rows = conn.execute(
+            """SELECT part_type FROM lesson_parts
+            WHERE season_id=? AND course_id=? AND lesson_id=?
+            AND generation_status='generated'""",
+            (lesson.season_id, lesson.course_id, lesson.lesson_id),
+        ).fetchall()
+        if not requested.issubset({PartType(row[0]) for row in rows}):
+            raise CoverRebuildError("Lesson must be fully prepared before a cover-only rebuild")
+        for part_type, (reference, digest, content) in image_artifacts.items():
+            publications = conn.execute(
+                """SELECT COUNT(*) FROM platform_publications
+                WHERE season_id=? AND course_id=? AND lesson_id=? AND part_type=?""",
+                (lesson.season_id, lesson.course_id, lesson.lesson_id, part_type.value),
+            ).fetchone()[0]
+            if publications:
+                raise CoverRebuildError(
+                    f"Cover-only rebuild is blocked after {part_type.value} publication has started"
+                )
+            conn.execute(
+                """UPDATE lesson_parts SET image_reference=?, image_hash=?, image_data=?
+                WHERE season_id=? AND course_id=?
+                AND lesson_id=? AND part_type=? AND generation_status='generated'""",
+                (reference, digest, content, lesson.season_id, lesson.course_id,
+                 lesson.lesson_id, part_type.value),
+            )
+
+
 def recent_reinforce_texts(lesson: CourseDay, limit: int = 7) -> tuple[str, ...]:
     init_course_storage()
     with database.connect() as conn:
@@ -278,15 +319,23 @@ def finish_admin_alert(alert_key: str, *, message_id: str | None = None,
 
 
 def recover_stale_work(minutes: int = 30) -> tuple[int, int]:
-    """Make interrupted claims retryable without touching successful publications."""
+    """Recover stale work without retrying an indeterminate external Dzen publish."""
     init_course_storage()
     with database.connect(immediate=True) as conn:
         if database.config.backend == "sqlite":
             threshold = f"-{minutes} minutes"
-            publications = conn.execute(
+            retryable_publications = conn.execute(
                 """UPDATE platform_publications SET status='failed',
                 error='Recovered stale publishing claim', updated_at=CURRENT_TIMESTAMP
-                WHERE status='publishing' AND updated_at <= datetime('now', ?)""",
+                WHERE status='publishing' AND platform<>'dzen'
+                AND updated_at <= datetime('now', ?)""",
+                (threshold,),
+            ).rowcount
+            ambiguous_dzen = conn.execute(
+                """UPDATE platform_publications SET status='ambiguous',
+                error='Stale Dzen claim requires manual verification', updated_at=CURRENT_TIMESTAMP
+                WHERE status='publishing' AND platform='dzen'
+                AND updated_at <= datetime('now', ?)""",
                 (threshold,),
             ).rowcount
             generations = conn.execute(
@@ -296,10 +345,18 @@ def recover_stale_work(minutes: int = 30) -> tuple[int, int]:
                 (threshold,),
             ).rowcount
         else:
-            publications = conn.execute(
+            retryable_publications = conn.execute(
                 """UPDATE platform_publications SET status='failed',
                 error='Recovered stale publishing claim', updated_at=CURRENT_TIMESTAMP
-                WHERE status='publishing' AND updated_at <= CURRENT_TIMESTAMP - (? * INTERVAL '1 minute')""",
+                WHERE status='publishing' AND platform<>'dzen'
+                AND updated_at <= CURRENT_TIMESTAMP - (? * INTERVAL '1 minute')""",
+                (minutes,),
+            ).rowcount
+            ambiguous_dzen = conn.execute(
+                """UPDATE platform_publications SET status='ambiguous',
+                error='Stale Dzen claim requires manual verification', updated_at=CURRENT_TIMESTAMP
+                WHERE status='publishing' AND platform='dzen'
+                AND updated_at <= CURRENT_TIMESTAMP - (? * INTERVAL '1 minute')""",
                 (minutes,),
             ).rowcount
             generations = conn.execute(
@@ -308,4 +365,4 @@ def recover_stale_work(minutes: int = 30) -> tuple[int, int]:
                 WHERE generation_status='generating' AND updated_at <= CURRENT_TIMESTAMP - (? * INTERVAL '1 minute')""",
                 (minutes,),
             ).rowcount
-    return publications, generations
+    return retryable_publications + ambiguous_dzen, generations

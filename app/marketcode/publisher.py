@@ -5,7 +5,7 @@ from pathlib import Path
 
 from app.bot import send_photo_with_caption, send_text
 from app.config import TELEGRAM_CHANNEL_ID
-from app.dzen_publisher import publish_draft
+from app.dzen_publisher import DzenPublishAmbiguousError, publish_draft
 from app.marketcode.config import load_settings
 from app.marketcode.content_plan import load_content_plan
 from app.marketcode.generator import generate_article
@@ -25,6 +25,9 @@ def _next_entry(content_plan: str):
 async def _attempt(label: str, operation, statuses: dict[str, str]) -> None:
     try:
         result = await operation()
+    except DzenPublishAmbiguousError as exc:
+        statuses[label] = f"ambiguous: {exc}"
+        logger.error("MarketCode %s publication requires manual verification: %s", label, exc)
     except Exception as exc:
         statuses[label] = f"failed: {exc}"
         logger.error("MarketCode %s publication failed: %s", label, exc)

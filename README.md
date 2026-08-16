@@ -110,7 +110,7 @@ Course flow не вызывает Pexels/Pixabay. Pillow создаёт отде
 
 ## Admin alerts и readiness
 
-При включённых `COURSE_ALERTS_ENABLED` и `ADMIN_TELEGRAM_CHAT_ID` существующий Telegram bot уведомляет владельца о required-source failure, `needs_review`, полном отказе всех платформ, критической ошибке course DB и startup/curriculum failure. Stable alert key сохраняется в PostgreSQL/SQLite; одиночные ошибки платформ не создают spam.
+При включённых `COURSE_ALERTS_ENABLED` и `ADMIN_TELEGRAM_CHAT_ID` существующий Telegram bot уведомляет владельца о required-source failure, `needs_review`, полном отказе всех платформ, неоднозначном результате Dzen publication, критической ошибке course DB и startup/curriculum failure. Stable alert key сохраняется в PostgreSQL/SQLite; одиночные ошибки платформ не создают spam.
 
 Если alerts выключены или chat ID отсутствует, приложение продолжает работу и пишет один warning. Секреты в alert и startup summary не выводятся.
 
