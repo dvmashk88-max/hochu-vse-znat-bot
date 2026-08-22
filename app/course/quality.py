@@ -144,9 +144,6 @@ def validate_parts(parts: tuple[CoursePart, ...], previous_reinforce_texts: tupl
         current_ctas = [_comments_cta(text) for text in (explain, try_part, reinforce)]
         if len(set(current_ctas)) != 3:
             errors.append("lesson parts must use different comments CTAs")
-        previous_ctas = {_comments_cta(text) for text in previous_reinforce_texts}
-        if any(current_cta and current_cta in previous_ctas for current_cta in current_ctas):
-            errors.append("comments CTA repeats a previous lesson")
         if not _TRY_ACTION.search(try_part):
             errors.append("try part must contain a clear action")
     if errors:

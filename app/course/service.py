@@ -29,6 +29,7 @@ from app.course.repository import (
     publication_statuses,
     recent_reinforce_texts,
     replace_prepared_lesson_covers,
+    retry_needs_review_generation,
     save_generated_lesson,
     save_generation_failure,
 )
@@ -69,7 +70,12 @@ def rebuild_prepared_lesson_covers(
     replace_prepared_lesson_covers(lesson, _cover_artifacts(lesson, part_types))
 
 
-async def prepare_lesson(lesson: CourseDay, retriever: SourceRetriever | None = None) -> bool:
+async def prepare_lesson(
+    lesson: CourseDay,
+    retriever: SourceRetriever | None = None,
+    *,
+    retry_needs_review: bool = False,
+) -> bool:
     try:
         status = generation_status(lesson)
     except Exception as exc:
@@ -79,6 +85,27 @@ async def prepare_lesson(lesson: CourseDay, retriever: SourceRetriever | None = 
             "критическая ошибка базы course state", str(exc),
         ), persistent_dedupe=False)
         return False
+    if status == "needs_review":
+        if not retry_needs_review:
+            logger.info(
+                "Course generation awaits scheduled retry: lesson=%s status=%s",
+                lesson.lesson_id,
+                status,
+            )
+            return False
+        try:
+            retryable = retry_needs_review_generation(lesson)
+        except Exception as exc:
+            logger.error("Course needs-review retry failed: lesson=%s error=%s", lesson.lesson_id, exc)
+            return False
+        if not retryable:
+            logger.warning(
+                "Course needs-review lesson cannot be retried safely: lesson=%s",
+                lesson.lesson_id,
+            )
+            return False
+        logger.info("Course needs-review lesson scheduled for one retry: lesson=%s", lesson.lesson_id)
+        status = "failed"
     if status == "generated":
         try:
             stored_parts = tuple(load_part(lesson, part_type) for part_type in PartType)
@@ -183,7 +210,7 @@ async def prepare_course_days(reference_date: date | None = None) -> None:
         target = today + timedelta(days=offset)
         day = plan.day_for_date(target)
         if day:
-            await prepare_lesson(day)
+            await prepare_lesson(day, retry_needs_review=True)
 
 
 async def _telegram(text: str, image: bytes) -> str:

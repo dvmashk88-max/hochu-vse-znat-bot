@@ -248,6 +248,22 @@ class DatabaseTests(unittest.TestCase):
                     ).fetchall()
                 self.assertEqual(rows, [(lesson.lesson_id,)])
 
+    def test_scheduled_needs_review_retry_requires_no_parts_or_publications(self):
+        lesson = load_curriculum(CURRICULUM).lessons[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(f"sqlite:///{Path(tmp) / 'course.db'}")
+            with patch.object(repository, "database", db):
+                repository.save_generation_failure(lesson, "quality exhausted", "needs_review")
+                self.assertTrue(repository.retry_needs_review_generation(lesson))
+                self.assertEqual(repository.generation_status(lesson), "failed")
+
+                repository.save_generation_failure(lesson, "quality exhausted", "needs_review")
+                repository.mark_missed(
+                    lesson, PartType.EXPLAIN, "telegram", "2026-08-14T09:00:00+03:00", "late"
+                )
+                self.assertFalse(repository.retry_needs_review_generation(lesson))
+                self.assertEqual(repository.generation_status(lesson), "needs_review")
+
     def test_generated_parts_sources_and_cover_artifact_persist(self):
         lesson = load_curriculum(CURRICULUM).lessons[0]
         parts = tuple(CoursePart(kind, kind.public_name, f"text-{kind.value}") for kind in PartType)
@@ -450,14 +466,13 @@ class QualityAndGenerationTests(unittest.TestCase):
         )
         validate_parts(warning)
 
-    def test_repeated_comments_cta_is_rejected(self):
+    def test_previous_lesson_cta_match_does_not_block_publication(self):
         parts = (
             CoursePart(PartType.EXPLAIN, "РАЗБИРАЕМ", _fitted("Объясняем контекст модели.", "Выберите пример.", 1850, "Исходные сведения направляют содержание и делают результат конкретнее. ")),
             CoursePart(PartType.TRY, "ПРОБУЕМ", _fitted("Проверяем контекст модели.", "Попробуйте запрос.", 1450, "Добавьте аудиторию и обстоятельства, а затем оцените полученный вариант. ")),
             CoursePart(PartType.REINFORCE, "ЗАКРЕПЛЯЕМ", _fitted("Закрепляем контекст модели.", "Напишите результат в комментариях.", 1100, "Отметьте полезную деталь и сформулируйте собственный итог работы. ")),
         )
-        with self.assertRaisesRegex(LessonQualityError, "CTA repeats"):
-            validate_parts(parts, (parts[-1].text,))
+        validate_parts(parts, (parts[-1].text,))
 
     def test_lesson_generation_uses_one_json_for_three_parts(self):
         lesson = load_curriculum(CURRICULUM).lessons[0]

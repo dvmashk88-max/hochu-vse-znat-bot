@@ -100,6 +100,31 @@ def claim_generation(lesson: CourseDay) -> bool:
         return cursor.rowcount == 1
 
 
+def retry_needs_review_generation(lesson: CourseDay) -> bool:
+    """Make an unpublished needs-review lesson retryable during scheduled preparation."""
+    init_course_storage()
+    with database.connect(immediate=True) as conn:
+        cursor = conn.execute(
+            """UPDATE course_lessons SET generation_status='failed', error=NULL,
+            updated_at=CURRENT_TIMESTAMP WHERE season_id=? AND course_id=? AND lesson_id=?
+            AND generation_status='needs_review'
+            AND NOT EXISTS (
+                SELECT 1 FROM lesson_parts
+                WHERE lesson_parts.season_id=course_lessons.season_id
+                AND lesson_parts.course_id=course_lessons.course_id
+                AND lesson_parts.lesson_id=course_lessons.lesson_id
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM platform_publications
+                WHERE platform_publications.season_id=course_lessons.season_id
+                AND platform_publications.course_id=course_lessons.course_id
+                AND platform_publications.lesson_id=course_lessons.lesson_id
+            )""",
+            (lesson.season_id, lesson.course_id, lesson.lesson_id),
+        )
+        return cursor.rowcount == 1
+
+
 def generation_status(lesson: CourseDay) -> str | None:
     init_course_storage()
     with database.connect() as conn:

@@ -69,6 +69,7 @@ class PreparationTests(unittest.IsolatedAsyncioTestCase):
             [call.args[0].date for call in prepare.await_args_list],
             [start + timedelta(days=offset) for offset in range(4)],
         )
+        self.assertTrue(all(call.kwargs == {"retry_needs_review": True} for call in prepare.await_args_list))
 
     async def test_generated_artifact_is_not_regenerated(self):
         day = load_curriculum_catalog(CATALOG).days[0]
@@ -136,6 +137,27 @@ class PreparationTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertFalse(await service.prepare_lesson(day))
         generate.assert_not_awaited()
+
+    async def test_scheduled_preparation_retries_unpublished_needs_review_once(self):
+        day = load_curriculum_catalog(CATALOG).days[0]
+        source = RetrievedSource(day.sources[0], "официальный материал " * 50, "hash")
+        retriever = AsyncMock()
+        retriever.retrieve.return_value = (source,)
+        generated = type("Generated", (), {"model": "qwen/qwen3.5-flash-02-23"})()
+        with (
+            patch("app.course.service.generation_status", return_value="needs_review"),
+            patch("app.course.service.retry_needs_review_generation", return_value=True) as retry,
+            patch("app.course.service.claim_generation", return_value=True),
+            patch("app.course.service.generate_lesson", new=AsyncMock(return_value=generated)) as generate,
+            patch("app.course.service.render_cover", return_value=(b"image", "digest")),
+            patch("app.course.service.save_generated_lesson"),
+            patch("app.course.service.recent_reinforce_texts", return_value=()),
+        ):
+            self.assertTrue(
+                await service.prepare_lesson(day, retriever, retry_needs_review=True)
+            )
+        retry.assert_called_once_with(day)
+        generate.assert_awaited_once()
 
 
 class AdminAlertTests(unittest.IsolatedAsyncioTestCase):
